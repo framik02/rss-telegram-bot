@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 RSS Feed Monitor per GitHub Actions
-Versione ottimizzata e pulita
+Versione ottimizzata con fix per Instagram
 """
 
 import requests
@@ -11,7 +11,8 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 
 # ================================
 # CONFIGURAZIONE
@@ -46,23 +47,36 @@ FEEDS_DA_MONITORARE = [
         "url": "https://www.google.com/alerts/feeds/03387377238691625601/1110300614940787881",
         "type": "rss"
     },
+    # Instagram - Soluzioni alternative
     {
-        "name": "Instagram - Fratelli d’Italia",
+        "name": "Instagram - Fratelli d'Italia",
         "emoji": "📸",
-        "url": "https://rsshub.app/instagram/user/fratelliditalia",
-        "type": "instagram"
+        "url": "https://rss.app/feeds/eSz39hnyubmwLjuW.xml",  # Sostituisci con URL RSS.app
+        "type": "instagram_alt",
+        "backup_urls": [
+            "https://rsshub.ktachibana.party/instagram/user/fratelliditalia",
+            "https://rss.shab.fun/instagram/user/fratelliditalia"
+        ]
     },
     {
         "name": "Instagram - Ministero del Lavoro",
         "emoji": "🚀",
-        "url": "https://rsshub.app/instagram/user/minlavoro",
-        "type": "instagram"
+        "url": "https://rss.app/feeds/O2NQW8pvSIQGpkby.xml",  # Sostituisci con URL RSS.app
+        "type": "instagram_alt",
+        "backup_urls": [
+            "https://rsshub.ktachibana.party/instagram/user/minlavoro",
+            "https://rss.shab.fun/instagram/user/minlavoro"
+        ]
     },
     {
-        "name": "Instagram - National Geographic",
-        "emoji": "📸",
-        "url": "https://rsshub.app/instagram/user/natgeo",
-        "type": "instagram"
+        "name": "Instagram - Meloni",
+        "emoji": "📸", 
+        "url": "https://rss.app/feeds/opRYqgialL3uzDej.xml",  # Sostituisci con URL RSS.app
+        "type": "instagram_alt",
+        "backup_urls": [
+            "https://rsshub.ktachibana.party/instagram/user/natgeo",
+            "https://rss.shab.fun/instagram/user/natgeo"
+        ]
     }
 ]
 
@@ -71,7 +85,19 @@ RSSHUB_INSTANCES = [
     "https://rsshub.app",
     "https://rss.shab.fun", 
     "https://rsshub.ktachibana.party",
+    "https://rsshub.rssforever.com"
 ]
+
+# Headers per evitare blocking
+REQUEST_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'application/rss+xml, application/xml, text/xml',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
+}
 
 # ================================
 # FUNZIONI UTILITY
@@ -159,68 +185,161 @@ def invia_messaggio_telegram(messaggio):
         log_message(f"❌ Errore nell'invio Telegram: {e}", "ERROR")
         return False
 
+def testa_url_feed(url, timeout=10):
+    """Testa se un URL feed è accessibile."""
+    try:
+        response = requests.head(url, headers=REQUEST_HEADERS, timeout=timeout)
+        return response.status_code == 200
+    except:
+        return False
+
+def trova_url_funzionante(feed_info):
+    """Trova un URL funzionante per il feed."""
+    # Prima prova l'URL principale
+    if testa_url_feed(feed_info['url']):
+        return feed_info['url']
+    
+    # Se ha URL di backup, provali
+    backup_urls = feed_info.get('backup_urls', [])
+    for backup_url in backup_urls:
+        log_message(f"🔄 Provo URL backup: {backup_url}")
+        if testa_url_feed(backup_url):
+            log_message(f"✅ URL backup funzionante: {backup_url}")
+            return backup_url
+    
+    # Per RSSHub, prova altre istanze
+    if "rsshub" in feed_info['url']:
+        return prova_rsshub_instances(feed_info['url'])
+    
+    log_message(f"⚠️ Nessun URL funzionante per {feed_info['name']}")
+    return feed_info['url']  # Ritorna l'originale come fallback
+
 def prova_rsshub_instances(url_originale):
     """Prova diverse istanze RSSHub se quella principale non funziona."""
     for instance in RSSHUB_INSTANCES:
         try:
-            if url_originale.startswith("https://rsshub.app"):
-                test_url = url_originale.replace("https://rsshub.app", instance)
-                response = requests.head(test_url, timeout=10)
-                if response.status_code == 200:
-                    log_message(f"✅ Istanza RSSHub funzionante: {instance}")
-                    return test_url
-        except:
+            # Estrai il path dall'URL originale
+            if "rsshub" in url_originale:
+                path_match = re.search(r'rsshub[^/]*/(.+)', url_originale)
+                if path_match:
+                    path = path_match.group(1)
+                    test_url = f"{instance}/{path}"
+                    if testa_url_feed(test_url):
+                        log_message(f"✅ Istanza RSSHub funzionante: {instance}")
+                        return test_url
+        except Exception as e:
+            log_message(f"❌ Errore testando {instance}: {e}")
             continue
-    log_message("⚠️ Nessuna istanza RSSHub disponibile, uso originale")
+    
+    log_message("⚠️ Nessuna istanza RSSHub disponibile")
     return url_originale
+
+def pulisci_contenuto_instagram(titolo, link):
+    """Pulisce e migliora il contenuto Instagram."""
+    # Rimuovi caratteri speciali dal titolo
+    titolo_pulito = re.sub(r'[^\w\s\-_.,!?]', '', titolo)
+    
+    # Accorcia titoli troppo lunghi
+    if len(titolo_pulito) > 100:
+        titolo_pulito = titolo_pulito[:97] + "..."
+    
+    return titolo_pulito
 
 def controlla_feed(feed_info, link_visti):
     """Controlla un singolo feed per nuovi contenuti."""
     nuovi_contenuti = []
     try:
         log_message(f"🔍 Controllo {feed_info.get('type', 'rss')}: {feed_info['name']}")
-        feed_url = feed_info['url']
         
-        # Failover per RSSHub
-        if "rsshub.app" in feed_url:
-            try:
-                test_response = requests.head(feed_url, timeout=10)
-                if test_response.status_code != 200:
-                    log_message("⚠️ Istanza RSSHub principale non risponde")
-                    feed_url = prova_rsshub_instances(feed_url)
-            except:
-                feed_url = prova_rsshub_instances(feed_url)
+        # Trova URL funzionante
+        feed_url = trova_url_funzionante(feed_info)
         
-        response = requests.get(feed_url, timeout=15)
+        # Richiedi il feed con headers appropriati
+        response = requests.get(feed_url, headers=REQUEST_HEADERS, timeout=20)
+        response.raise_for_status()
+        
         feed = feedparser.parse(response.content)
         
         if not feed.entries:
             log_message(f"📭 Nessun contenuto in {feed_info['name']}")
             return nuovi_contenuti
         
+        # Filtra solo contenuti recenti (ultimi 3 giorni)
+        tre_giorni_fa = datetime.now() - timedelta(days=3)
+        
         for entry in feed.entries:
             link = getattr(entry, 'link', '').strip()
             titolo = getattr(entry, 'title', 'Titolo non disponibile').strip()
+            
             if not link or link in link_visti:
                 continue
             
+            # Controlla se il contenuto è recente
+            pub_date = getattr(entry, 'published_parsed', None)
+            if pub_date:
+                entry_date = datetime(*pub_date[:6])
+                if entry_date < tre_giorni_fa:
+                    continue
+            
+            # Pulisci contenuto Instagram
             tipo = feed_info.get('type', 'rss')
+            if 'instagram' in tipo:
+                titolo = pulisci_contenuto_instagram(titolo, link)
+            
+            # Crea messaggio
             messaggio = (
                 f"{feed_info['emoji']} <b>{feed_info['name']}</b>\n\n"
                 f"📰 {titolo}\n\n"
                 f"🔗 {link}"
             )
+            
+            # Aggiungi info sulla data se disponibile
+            if pub_date:
+                data_pub = datetime(*pub_date[:6]).strftime("%d/%m/%Y %H:%M")
+                messaggio += f"\n📅 {data_pub}"
+            
             nuovi_contenuti.append({'link': link, 'messaggio': messaggio})
             link_visti.add(link)
         
         log_message(f"🆕 {len(nuovi_contenuti)} nuovi contenuti in {feed_info['name']}")
+        
+    except requests.exceptions.RequestException as e:
+        log_message(f"❌ Errore di rete per {feed_info['name']}: {e}", "ERROR")
+        # Per Instagram, suggerisci soluzioni alternative
+        if 'instagram' in feed_info.get('type', ''):
+            invia_messaggio_telegram(
+                f"⚠️ <b>{feed_info['name']}</b>\n\n"
+                f"❌ Feed Instagram non disponibile\n"
+                f"💡 Considera di usare RSS.app o Feedity per questo account\n"
+                f"🔗 https://rss.app/rss-feed/create-instagram-rss-feed"
+            )
     except Exception as e:
-        log_message(f"❌ Errore nel feed {feed_info['name']}: {e}", "ERROR")
+        log_message(f"❌ Errore generico nel feed {feed_info['name']}: {e}", "ERROR")
+    
     return nuovi_contenuti
+
+def invia_report_stato():
+    """Invia un report dello stato del monitoraggio."""
+    if TEST_MODE:
+        return
+        
+    feeds_attivi = len(FEEDS_DA_MONITORARE)
+    feeds_instagram = len([f for f in FEEDS_DA_MONITORARE if 'instagram' in f.get('type', '')])
+    
+    report = (
+        f"📊 <b>RSS Monitor - Report Stato</b>\n\n"
+        f"✅ Monitor attivo\n"
+        f"📡 {feeds_attivi} feed monitorati\n"
+        f"📸 {feeds_instagram} feed Instagram\n"
+        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+        f"ℹ️ I feed Instagram potrebbero richiedere configurazione aggiuntiva"
+    )
+    
+    invia_messaggio_telegram(report)
 
 def main():
     log_message("=" * 60)
-    log_message("🤖 RSS FEED MONITOR - GitHub Actions")
+    log_message("🤖 RSS FEED MONITOR - GitHub Actions (Instagram Fixed)")
     log_message("=" * 60)
     log_message(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log_message(f"📋 Monitoraggio {len(FEEDS_DA_MONITORARE)} feed")
@@ -231,24 +350,35 @@ def main():
     
     if TEST_MODE:
         log_message("🧪 Modalità test attivata")
-        invia_messaggio_telegram("🧪 Test RSS Monitor completato con successo ✅")
+        invia_messaggio_telegram("🧪 Test RSS Monitor (Instagram Fixed) completato con successo ✅")
+        invia_report_stato()
         return
     
     link_visti = carica_link_visti()
     nuovi_contenuti_totali = 0
+    
+    # Invia report di stato ogni tanto (es. una volta al giorno)
+    ora_corrente = datetime.now().hour
+    if ora_corrente == 9:  # Alle 9:00
+        invia_report_stato()
     
     for feed_info in FEEDS_DA_MONITORARE:
         nuovi_contenuti = controlla_feed(feed_info, link_visti)
         for contenuto in nuovi_contenuti:
             if invia_messaggio_telegram(contenuto['messaggio']):
                 nuovi_contenuti_totali += 1
-                time.sleep(1)
+                time.sleep(2)  # Pausa più lunga per evitare rate limiting
     
     salva_link_visti(link_visti)
     
     log_message("=" * 60)
     log_message(f"📤 {nuovi_contenuti_totali} nuovi contenuti inviati")
     log_message(f"💾 {len(link_visti)} link tracciati")
+    
+    # Messaggio finale se non ci sono nuovi contenuti
+    if nuovi_contenuti_totali == 0:
+        log_message("📭 Nessun nuovo contenuto trovato")
+    
     log_message("=" * 60)
 
 if __name__ == "__main__":
@@ -259,4 +389,7 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         log_message(f"💥 Errore critico: {e}", "ERROR")
+        # Invia notifica di errore critico
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            invia_messaggio_telegram(f"🚨 <b>RSS Monitor - Errore Critico</b>\n\n❌ {str(e)}")
         sys.exit(1)
