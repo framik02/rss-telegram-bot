@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -126,10 +128,20 @@ def verifica_configurazione():
     return True
 
 def carica_link_visti():
-    """Carica i link già visti dal file JSON locale."""
+    """Carica i link già visti dal file JSON locale o da GitHub Gist."""
+    # Prima prova a caricare da GitHub Gist (persistente)
+    link_da_gist = carica_da_gist()
+    if link_da_gist:
+        return link_da_gist
+    
+    # Se non c'è Gist, prova il file locale
     if not os.path.exists(FILE_VISTI):
         log_message(f"📁 File {FILE_VISTI} non trovato - primo avvio")
-        return set()
+        
+        # PRIMO AVVIO: crea un set iniziale con timestamp per evitare spam
+        primo_avvio_marker = f"primo_avvio_{datetime.now().strftime('%Y%m%d')}"
+        log_message(f"🎯 Primo avvio rilevato - modalità inizializzazione attiva")
+        return {primo_avvio_marker}
     
     try:
         with open(FILE_VISTI, 'r', encoding='utf-8') as f:
@@ -138,6 +150,20 @@ def carica_link_visti():
                 return set()
             data = json.loads(content)
             links = set(data.get('link_visti', []))
+            
+            # Controlla età dei dati
+            ultimo_aggiornamento = data.get('ultimo_aggiornamento', '')
+            if ultimo_aggiornamento:
+                try:
+                    ultima_data = datetime.fromisoformat(ultimo_aggiornamento.replace('Z', '+00:00'))
+                    giorni_fa = (datetime.now() - ultima_data.replace(tzinfo=None)).days
+                    if giorni_fa > 7:
+                        log_message(f"⚠️ Dati vecchi di {giorni_fa} giorni - reset parziale")
+                        # Mantieni solo link recenti (simulazione)
+                        return set(list(links)[-100:]) if len(links) > 100 else links
+                except:
+                    pass
+            
             log_message(f"📂 Caricati {len(links)} link già processati")
             return links
     except Exception as e:
@@ -145,7 +171,7 @@ def carica_link_visti():
         return set()
 
 def salva_link_visti(link_visti):
-    """Salva i link visti nel file JSON locale."""
+    """Salva i link visti nel file JSON locale con gestione GitHub Gist."""
     try:
         data = {
             'ultimo_aggiornamento': datetime.now().isoformat(),
@@ -155,13 +181,84 @@ def salva_link_visti(link_visti):
             'repository': os.getenv('GITHUB_REPOSITORY', 'unknown'),
             'run_id': os.getenv('GITHUB_RUN_ID', 'unknown')
         }
+        
+        # Salva localmente
         with open(FILE_VISTI, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         log_message(f"💾 Salvati {len(link_visti)} link nel file {FILE_VISTI}")
+        
+        # Prova a sincronizzare con GitHub Gist per persistenza
+        salva_su_gist(data)
+        
         return True
     except Exception as e:
         log_message(f"❌ Errore nel salvare {FILE_VISTI}: {e}", "ERROR")
         return False
+
+def salva_su_gist(data):
+    """Salva i dati su GitHub Gist per persistenza tra le esecuzioni."""
+    if not GITHUB_TOKEN:
+        return
+        
+    gist_id = os.getenv('GIST_ID', '')  # Aggiungi questo come secret
+    if not gist_id:
+        return
+        
+    try:
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'files': {
+                'visti.json': {
+                    'content': json.dumps(data, ensure_ascii=False, indent=2)
+                }
+            }
+        }
+        
+        response = requests.patch(url, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            log_message("☁️ Dati sincronizzati con GitHub Gist")
+        else:
+            log_message(f"⚠️ Errore sync Gist: {response.status_code}")
+            
+    except Exception as e:
+        log_message(f"⚠️ Errore sincronizzazione Gist: {e}")
+
+def carica_da_gist():
+    """Carica i dati da GitHub Gist se disponibile."""
+    if not GITHUB_TOKEN:
+        return set()
+        
+    gist_id = os.getenv('GIST_ID', '')
+    if not gist_id:
+        return set()
+        
+    try:
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            gist_data = response.json()
+            if 'visti.json' in gist_data['files']:
+                content = gist_data['files']['visti.json']['content']
+                data = json.loads(content)
+                links = set(data.get('link_visti', []))
+                log_message(f"☁️ Caricati {len(links)} link da GitHub Gist")
+                return links
+                
+    except Exception as e:
+        log_message(f"⚠️ Errore caricamento da Gist: {e}")
+        
+    return set()
 
 def invia_messaggio_telegram(messaggio):
     """Invia un messaggio su Telegram."""
@@ -264,21 +361,46 @@ def controlla_feed(feed_info, link_visti):
             log_message(f"📭 Nessun contenuto in {feed_info['name']}")
             return nuovi_contenuti
         
-        # Filtra solo contenuti recenti (ultimi 3 giorni)
-        tre_giorni_fa = datetime.now() - timedelta(days=3)
+        # FILTRO TEMPORALE RIGOROSO - Solo ultimi 2 giorni per sicurezza
+        due_giorni_fa = datetime.now() - timedelta(days=2)
         
-        for entry in feed.entries:
+        # Primo avvio: prendi solo ultimo elemento per feed per evitare spam
+        primo_avvio = len(link_visti) == 0
+        contenuti_processati = 0
+        
+        # Ordina per data (più recenti prima)
+        entries_sorted = sorted(feed.entries, 
+                              key=lambda x: getattr(x, 'published_parsed', (1970, 1, 1, 0, 0, 0, 0, 0, 0)), 
+                              reverse=True)
+        
+        for entry in entries_sorted:
+            # Limite per primo avvio: massimo 1 elemento per feed
+            if primo_avvio and contenuti_processati >= 1:
+                log_message(f"🛑 Primo avvio: limitato a 1 elemento per {feed_info['name']}")
+                break
+                
             link = getattr(entry, 'link', '').strip()
             titolo = getattr(entry, 'title', 'Titolo non disponibile').strip()
             
             if not link or link in link_visti:
                 continue
             
-            # Controlla se il contenuto è recente
+            # CONTROLLO DATA RIGOROSO
             pub_date = getattr(entry, 'published_parsed', None)
             if pub_date:
                 entry_date = datetime(*pub_date[:6])
-                if entry_date < tre_giorni_fa:
+                
+                # Skip contenuti vecchi
+                if entry_date < due_giorni_fa:
+                    log_message(f"⏭️ Skip contenuto vecchio: {entry_date.strftime('%d/%m/%Y %H:%M')}")
+                    continue
+                    
+                # Log della data per debug
+                log_message(f"📅 Contenuto del: {entry_date.strftime('%d/%m/%Y %H:%M')}")
+            else:
+                # Se non ha data, è probabilmente vecchio - skip in caso di primo avvio
+                if primo_avvio:
+                    log_message(f"⏭️ Skip contenuto senza data (primo avvio)")
                     continue
             
             # Pulisci contenuto Instagram
@@ -300,8 +422,12 @@ def controlla_feed(feed_info, link_visti):
             
             nuovi_contenuti.append({'link': link, 'messaggio': messaggio})
             link_visti.add(link)
+            contenuti_processati += 1
         
-        log_message(f"🆕 {len(nuovi_contenuti)} nuovi contenuti in {feed_info['name']}")
+        if primo_avvio and contenuti_processati > 0:
+            log_message(f"🎯 Primo avvio: {contenuti_processati} contenuto inizializzato per {feed_info['name']}")
+        else:
+            log_message(f"🆕 {len(nuovi_contenuti)} nuovi contenuti in {feed_info['name']}")
         
     except requests.exceptions.RequestException as e:
         log_message(f"❌ Errore di rete per {feed_info['name']}: {e}", "ERROR")
