@@ -1,8 +1,17 @@
+
 #!/usr/bin/env python3
-# -- coding: utf-8 --
+# -*- coding: utf-8 -*-
 """
-RSS Feed Monitor con notifiche Telegram
-Monitora feed RSS e invia notifiche su Telegram per nuovi contenuti
+RSS Feed Monitor con Instagram e notifiche Telegram
+Monitora feed RSS e post Instagram, invia notifiche su Telegram per nuovi contenuti
+
+Supporta:
+- Feed RSS tradizionali
+- Post Instagram tramite RSSHub
+- Account Twitter/X tramite RSSHub
+- YouTube, Reddit e altri servizi
+
+GitHub: https://github.com/tuousername/rss-telegram-monitor
 """
 
 import requests
@@ -17,40 +26,107 @@ from datetime import datetime
 # ================================
 
 # Token del bot Telegram (ottienilo da @BotFather)
-TELEGRAM_TOKEN = "8358394281:AAHUUZeDWKSTpu0IP1dnYUanuvlwpiLRSNA"
+# IMPORTANTE: Per GitHub, usa variabili d'ambiente o file config.json
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
-# Chat ID dove inviare i messaggi (ottienilo scrivendo al bot e usando /start)
-TELEGRAM_CHAT_ID = "6129973289"
+# Chat ID dove inviare i messaggi
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # File per salvare i link già inviati
 FILE_VISTI = "visti.json"
 
 # Tempo di attesa tra i controlli (in secondi) - 600 = 10 minuti
-INTERVALLO_CONTROLLO = 600
+INTERVALLO_CONTROLLO = int(os.getenv("INTERVALLO_CONTROLLO", "600"))
 
-# Lista dei feed RSS da monitorare
-FEEDS_RSS = [
+# Lista dei feed da monitorare
+# Supporta RSS tradizionali e servizi tramite RSSHub
+FEEDS_DA_MONITORARE = [
+    # Google Alerts (i tuoi feed esistenti)
     {
-        "name": "Bellucci",
+        "name": "Bellucci News",
         "emoji": "📢",
-        "url": "https://www.google.com/alerts/feeds/03387377238691625601/16829576264885656380"
+        "url": "https://www.google.com/alerts/feeds/03387377238691625601/16829576264885656380",
+        "type": "rss"
     },
     {
-        "name": "Ministero",
-        "emoji": "🚀",
-        "url": "https://www.google.com/alerts/feeds/03387377238691625601/16156285375326995850"
+        "name": "Ministero Updates",
+        "emoji": "🚀", 
+        "url": "https://www.google.com/alerts/feeds/03387377238691625601/16156285375326995850",
+        "type": "rss"
     },
     {
-        "name": "Bellucci",
+        "name": "Bellucci Research",
         "emoji": "🔬",
-        "url": "https://www.google.com/alerts/feeds/03387377238691625601/1110300614940787881"
-    }
-    # Aggiungi altri feed qui seguendo lo stesso formato
+        "url": "https://www.google.com/alerts/feeds/03387377238691625601/1110300614940787881",
+        "type": "rss"
+    },
+    
+    # Instagram tramite RSSHub (GRATUITO)
+    {
+        "name": "Instagram - fdi",
+        "emoji": "📸",
+        "url": "https://www.instagram.com/fratelliditalia",
+        "type": "instagram"
+    },
+    {
+        "name": "Instagram - mlps", 
+        "emoji": "🚀",
+        "url": "https://www.instagram.com/minlavoro",
+        "type": "instagram"
+    },
+    
+    # Altri servizi social tramite RSSHub
+    # {
+    #     "name": "Twitter - @username",
+    #     "emoji": "🐦",
+    #     "url": "https://rsshub.app/twitter/user/username",
+    #     "type": "twitter"
+    # },
+    # {
+    #     "name": "YouTube - Channel",
+    #     "emoji": "📺", 
+    #     "url": "https://rsshub.app/youtube/user/@channelname",
+    #     "type": "youtube"
+    # },
+    # {
+    #     "name": "Reddit - Subreddit",
+    #     "emoji": "🤖",
+    #     "url": "https://rsshub.app/reddit/r/python",
+    #     "type": "reddit"
+    # }
+]
+
+# RSSHub instances (fallback se il principale non funziona)
+RSSHUB_INSTANCES = [
+    "https://rsshub.app",
+    "https://rss.shab.fun", 
+    "https://rsshub.ktachibana.party",
+    "https://rsshub.feeded.xyz"
 ]
 
 # ================================
 # FUNZIONI UTILITY
 # ================================
+
+def carica_configurazione():
+    """
+    Carica configurazione da file config.json se esiste.
+    Utile per deployment senza esporre token.
+    """
+    config_file = "config.json"
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config
+        except Exception as e:
+            print(f"❌ Errore nel leggere {config_file}: {e}")
+    
+    return {
+        "telegram_token": TELEGRAM_TOKEN,
+        "telegram_chat_id": TELEGRAM_CHAT_ID,
+        "intervallo_controllo": INTERVALLO_CONTROLLO
+    }
 
 def carica_link_visti():
     """
@@ -85,29 +161,22 @@ def salva_link_visti(link_visti):
     except Exception as e:
         print(f"❌ Errore nel salvare {FILE_VISTI}: {e}")
 
-def invia_messaggio_telegram(messaggio):
+def invia_messaggio_telegram(messaggio, token, chat_id):
     """
     Invia un messaggio tramite l'API di Telegram.
-
-    Args:
-        messaggio (str): Il testo del messaggio da inviare
-
-    Returns:
-        bool: True se l'invio è riuscito, False altrimenti
     """
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
+        'chat_id': chat_id,
         'text': messaggio,
-        'parse_mode': 'HTML',  # Permette formatting HTML
-        'disable_web_page_preview': False  # Mostra l'anteprima dei link
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': False
     }
 
     try:
         response = requests.post(url, data=payload, timeout=30)
         response.raise_for_status()
-
         print(f"✅ Messaggio inviato su Telegram")
         return True
 
@@ -115,55 +184,103 @@ def invia_messaggio_telegram(messaggio):
         print(f"❌ Errore nell'inviare messaggio Telegram: {e}")
         return False
 
-def controlla_feed_rss(feed_info, link_visti):
+def prova_rsshub_instances(url_path):
     """
-    Controlla un singolo feed RSS per nuovi contenuti.
+    Prova diverse istanze RSSHub se quella principale non funziona.
+    """
+    for instance in RSSHUB_INSTANCES:
+        try:
+            # Sostituisce il dominio RSSHub nell'URL
+            if url_path.startswith("https://rsshub.app"):
+                test_url = url_path.replace("https://rsshub.app", instance)
+            else:
+                continue
+                
+            print(f"🔍 Provo istanza RSSHub: {instance}")
+            response = requests.get(test_url, timeout=15)
+            
+            if response.status_code == 200:
+                return test_url
+                
+        except requests.exceptions.RequestException:
+            continue
+    
+    return url_path  # Ritorna l'URL originale se nessuna istanza funziona
 
-    Args:
-        feed_info (dict): Informazioni del feed (name, emoji, url)
-        link_visti (set): Set dei link già processati
-
-    Returns:
-        list: Lista dei nuovi link trovati
+def controlla_feed(feed_info, link_visti):
+    """
+    Controlla un singolo feed per nuovi contenuti.
+    Supporta diversi tipi di contenuto tramite RSSHub.
     """
     nuovi_link = []
 
     try:
-        print(f"🔍 Controllo feed: {feed_info['name']}")
+        print(f"🔍 Controllo {feed_info.get('type', 'rss')}: {feed_info['name']}")
 
-        # Scarica e parsa il feed RSS
-        feed = feedparser.parse(feed_info['url'])
+        feed_url = feed_info['url']
+        
+        # Se è un feed RSSHub e fallisce, prova altre istanze
+        if "rsshub.app" in feed_url:
+            try:
+                test_response = requests.get(feed_url, timeout=15)
+                if test_response.status_code != 200:
+                    feed_url = prova_rsshub_instances(feed_url)
+            except:
+                feed_url = prova_rsshub_instances(feed_url)
+
+        # Scarica e parsa il feed
+        feed = feedparser.parse(feed_url)
 
         if feed.bozo:
-            print(f"⚠  Warning: feed malformato per {feed_info['name']}")
+            print(f"⚠️  Warning: feed malformato per {feed_info['name']}")
 
         # Controlla ogni entry nel feed
         for entry in feed.entries:
-            # Usa il link come identificativo unico
             link = getattr(entry, 'link', '')
 
-            if not link:
+            if not link or link in link_visti:
                 continue
 
-            # Se il link non è mai stato visto, è nuovo
-            if link not in link_visti:
-                titolo = getattr(entry, 'title', 'Titolo non disponibile')
-
-                # Crea il messaggio formattato
+            titolo = getattr(entry, 'title', 'Titolo non disponibile')
+            
+            # Formatting specifico per tipo di contenuto
+            tipo_contenuto = feed_info.get('type', 'rss')
+            
+            if tipo_contenuto == 'instagram':
+                messaggio = (
+                    f"{feed_info['emoji']} <b>{feed_info['name']}</b>\n\n"
+                    f"📸 Nuovo post Instagram\n"
+                    f"📝 {titolo}\n\n"
+                    f"🔗 {link}"
+                )
+            elif tipo_contenuto == 'twitter':
+                messaggio = (
+                    f"{feed_info['emoji']} <b>{feed_info['name']}</b>\n\n"  
+                    f"🐦 Nuovo tweet\n"
+                    f"💬 {titolo}\n\n"
+                    f"🔗 {link}"
+                )
+            elif tipo_contenuto == 'youtube':
+                messaggio = (
+                    f"{feed_info['emoji']} <b>{feed_info['name']}</b>\n\n"
+                    f"📺 Nuovo video\n"
+                    f"🎬 {titolo}\n\n" 
+                    f"🔗 {link}"
+                )
+            else:  # RSS tradizionale
                 messaggio = (
                     f"{feed_info['emoji']} <b>{feed_info['name']}</b>\n\n"
                     f"📰 {titolo}\n\n"
                     f"🔗 {link}"
                 )
 
-                nuovi_link.append({
-                    'link': link,
-                    'messaggio': messaggio,
-                    'feed_name': feed_info['name']
-                })
+            nuovi_link.append({
+                'link': link,
+                'messaggio': messaggio,
+                'feed_name': feed_info['name']
+            })
 
-                # Aggiungi il link ai visti
-                link_visti.add(link)
+            link_visti.add(link)
 
         if nuovi_link:
             print(f"🆕 Trovati {len(nuovi_link)} nuovi contenuti in {feed_info['name']}")
@@ -175,23 +292,52 @@ def controlla_feed_rss(feed_info, link_visti):
 
     return nuovi_link
 
+def stampa_info_progetto():
+    """
+    Stampa informazioni sul progetto per GitHub.
+    """
+    print("=" * 60)
+    print("📡 RSS FEED MONITOR CON INSTAGRAM")
+    print("=" * 60)
+    print("🔹 Monitora feed RSS tradizionali")
+    print("🔹 Monitora Instagram tramite RSSHub (GRATUITO)")
+    print("🔹 Monitora Twitter, YouTube, Reddit e altri")
+    print("🔹 Invia notifiche su Telegram")
+    print("🔹 Open Source - GitHub: tuousername/rss-telegram-monitor")
+    print("=" * 60)
+
 def main():
     """
     Funzione principale che esegue il monitoraggio continuo.
     """
-    print("🤖 Avvio RSS Feed Monitor per Telegram")
-    print(f"⏰ Controllo ogni {INTERVALLO_CONTROLLO//60} minuti")
-    print(f"📋 Monitoraggio {len(FEEDS_RSS)} feed RSS")
+    stampa_info_progetto()
+    
+    # Carica configurazione
+    config = carica_configurazione()
+    token = config.get('telegram_token', '')
+    chat_id = config.get('telegram_chat_id', '')
+    intervallo = config.get('intervallo_controllo', 600)
+
+    print(f"⏰ Controllo ogni {intervallo//60} minuti")
+    print(f"📋 Monitoraggio {len(FEEDS_DA_MONITORARE)} feed")
     print("-" * 50)
 
     # Verifica configurazione
-    if TELEGRAM_TOKEN == "IL_TUO_TOKEN_QUI" or TELEGRAM_CHAT_ID == "IL_TUO_CHAT_ID_QUI":
-        print("❌ ERRORE: Devi configurare TELEGRAM_TOKEN e TELEGRAM_CHAT_ID!")
-        print("1. Ottieni il token da @BotFather su Telegram")
-        print("2. Ottieni il chat_id scrivendo al tuo bot")
+    if not token or not chat_id:
+        print("❌ ERRORE: Token Telegram non configurato!")
+        print("\n🔧 CONFIGURAZIONE:")
+        print("1. Crea un file config.json con:")
+        print('   {')
+        print('     "telegram_token": "IL_TUO_TOKEN",')
+        print('     "telegram_chat_id": "IL_TUO_CHAT_ID"') 
+        print('   }')
+        print("\n2. Oppure usa variabili d'ambiente:")
+        print("   export TELEGRAM_TOKEN='il_tuo_token'")
+        print("   export TELEGRAM_CHAT_ID='il_tuo_chat_id'")
+        print("\n📖 Guida completa: README.md del repository")
         return
 
-    # Carica i link già visti
+    # Carica link già visti
     link_visti = carica_link_visti()
     print(f"💾 Caricati {len(link_visti)} link già processati")
 
@@ -205,34 +351,34 @@ def main():
 
             nuovi_contenuti_totali = 0
 
-            # Controlla ogni feed RSS
-            for feed_info in FEEDS_RSS:
-                nuovi_link = controlla_feed_rss(feed_info, link_visti)
+            # Controlla ogni feed
+            for feed_info in FEEDS_DA_MONITORARE:
+                nuovi_link = controlla_feed(feed_info, link_visti)
 
                 # Invia ogni nuovo contenuto trovato
                 for contenuto in nuovi_link:
-                    if invia_messaggio_telegram(contenuto['messaggio']):
+                    if invia_messaggio_telegram(contenuto['messaggio'], token, chat_id):
                         nuovi_contenuti_totali += 1
-                        # Piccola pausa tra i messaggi per evitare rate limiting
+                        # Pausa tra messaggi per evitare rate limiting
                         time.sleep(1)
                     else:
-                        # Se l'invio fallisce, rimuovi il link dai visti per ritentare
+                        # Se l'invio fallisce, rimuovi il link per ritentare
                         link_visti.discard(contenuto['link'])
 
-            # Salva i link visti aggiornati
+            # Salva i link visti
             if nuovi_contenuti_totali > 0:
                 salva_link_visti(link_visti)
                 print(f"📤 Inviati {nuovi_contenuti_totali} nuovi contenuti")
             else:
                 print("😴 Nessun nuovo contenuto trovato")
 
-            print(f"⏳ Prossimo controllo tra {INTERVALLO_CONTROLLO//60} minuti...")
-            time.sleep(INTERVALLO_CONTROLLO)
+            print(f"⏳ Prossimo controllo tra {intervallo//60} minuti...")
+            time.sleep(intervallo)
 
     except KeyboardInterrupt:
-        print("\n\n⏹  Interruzione manuale rilevata")
+        print("\n\n⏹️  Interruzione manuale rilevata")
         salva_link_visti(link_visti)
-        print("💾 Link visti salvati prima della chiusura")
+        print("💾 Link visti salvati")
         print("👋 RSS Feed Monitor terminato")
 
     except Exception as e:
