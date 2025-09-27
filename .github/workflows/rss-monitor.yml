@@ -5,7 +5,7 @@ name: RSS Feed Monitor
 on:
   schedule:
     # Ogni 30 minuti (GitHub Actions ha un minimo di 5 minuti)
-    - cron: '*/30 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: # Permette l'avvio manuale dal pannello GitHub
 
 jobs:
