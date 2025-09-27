@@ -1,46 +1,94 @@
-
-
 name: RSS Feed Monitor
 
 on:
   schedule:
-    # Ogni 30 minuti (GitHub Actions ha un minimo di 5 minuti)
+    # Esegue ogni 10 minuti - puoi cambiare:
+    # */5 * * * *    = ogni 5 minuti
+    # */15 * * * *   = ogni 15 minuti  
+    # 0 * * * *      = ogni ora
+    # 0 */6 * * *    = ogni 6 ore
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Permette l'avvio manuale dal pannello GitHub
+  
+  # Permette avvio manuale dalla tab Actions
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Test mode (invia solo un messaggio di test)'
+        required: false
+        default: 'false'
+        type: boolean
+  
+  # Esegue quando modifichi il workflow
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/monitor.yml'
+      - 'github_monitor.py'
 
 jobs:
-  monitor-rss:
+  monitor:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 📥 Checkout del repository
+    - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: 🐍 Setup Python
+      
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-    
-    - name: 📦 Installa dipendenze
+        python-version: '3.9'
+        
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
       run: |
-        pip install requests feedparser
-    
-    - name: 🤖 Esegui RSS Monitor
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Download previous state
+      continue-on-error: true
+      run: |
+        # Scarica lo stato precedente se esiste
+        if curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+           -H "Accept: application/vnd.github.v3.raw" \
+           -o visti.json \
+           "https://api.github.com/repos/${{ github.repository }}/contents/visti.json" 2>/dev/null; then
+          echo "✅ Stato precedente scaricato"
+        else
+          echo "📁 Primo avvio, nessuno stato precedente"
+          echo '{"link_visti": []}' > visti.json
+        fi
+        
+    - name: Run RSS Monitor
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: python rss_monitor.py
-    
-    - name: 💾 Commit dei file aggiornati
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        python github_monitor.py
+        
+    - name: Save state back to repository
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Configura git
         git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action RSS Monitor"
-        git add visti.json
-        if ! git diff --staged --quiet; then
-          git commit -m "🔄 Aggiorna link RSS visti - $(date '+%Y-%m-%d %H:%M:%S')"
-          git push
-        else
-          echo "📭 Nessun nuovo contenuto da salvare"
+        git config --local user.name "GitHub Action"
+        
+        # Aggiungi e committa solo se ci sono modifiche
+        if [ -f visti.json ] && [ -s visti.json ]; then
+          git add visti.json
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 Update monitored feeds state [skip ci]"
+            git push
+            echo "✅ Stato salvato nel repository"
+          else
+            echo "📝 Nessuna modifica da salvare"
+          fi
         fi
