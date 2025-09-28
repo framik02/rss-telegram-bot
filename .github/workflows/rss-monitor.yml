@@ -1,176 +1,44 @@
-name: RSS Feed Monitor
-
+name: RSS Monitor
 on:
   schedule:
-    # Esegue ogni 10 minuti - puoi cambiare:
-    # */5 * * * *    = ogni 5 minuti
-    # */15 * * * *   = ogni 15 minuti  
-    # 0 * * * *      = ogni ora
-    # 0 */6 * * *    = ogni 6 ore
-    - cron: '*/5 * * * *'
-  
-  # Permette avvio manuale dalla tab Actions
+    - cron: '*/30 * * * *'  # Ogni 30 minuti
   workflow_dispatch:
-    inputs:
-      test_mode:
-        description: 'Test mode (invia solo un messaggio di test)'
-        required: false
-        default: 'false'
-        type: boolean
-  
-  # Esegue quando modifichi il workflow
-  push:
-    branches: [ main, master ]
-    paths:
-      - '.github/workflows/monitor.yml'
-      - 'github_monitor.py'
+
+permissions:
+  contents: write  # IMPORTANTE: Permette commit
+  actions: read
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Set up Python
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
-        
-    - name: Cache Python dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          
-    - name: Create requirements.txt if missing
-      run: |
-        if [ ! -f requirements.txt ]; then
-          echo "📝 Creazione requirements.txt..."
-          cat > requirements.txt << EOF
-        requests>=2.28.0
-        feedparser>=6.0.10
-        python-dateutil>=2.8.0
-        EOF
-        fi
-        cat requirements.txt
+        python-version: '3.x'
         
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Download previous state
-      continue-on-error: true
-      run: |
-        echo "📥 Tentativo scaricamento stato precedente..."
-        
-        # Prova a scaricare visti.json se esiste
-        curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-             -H "Accept: application/vnd.github.v3.raw" \
-             -o visti.json \
-             "https://api.github.com/repos/${{ github.repository }}/contents/visti.json" || {
-          echo "📁 Primo avvio - creazione stato iniziale"
-          echo '{"link_visti": [], "primo_avvio": true, "created": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"}' > visti.json
-        }
-        
-        # Verifica il file
-        if [ -f visti.json ] && [ -s visti.json ]; then
-          echo "✅ File stato caricato:"
-          head -5 visti.json
-        else
-          echo "⚠️  Creazione file stato di fallback"
-          echo '{"link_visti": []}' > visti.json
-        fi
+        pip install requests feedparser
         
     - name: Run RSS Monitor
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TEST_MODE: ${{ github.event.inputs.test_mode }}
+        PERSONAL_TOKEN: ${{ secrets.PERSONAL_TOKEN }}  # CAMBIATO
+        GIST_ID: ${{ secrets.GIST_ID }}
+        TEST_MODE: ${{ secrets.TEST_MODE }}
+      run: python rss_monitor.py
+      
+    - name: Commit and push changes
       run: |
-        echo "🚀 Avvio RSS Monitor..."
-        
-        # Verifica che il file github_monitor.py esista
-        if [ ! -f github_monitor.py ]; then
-          echo "❌ File github_monitor.py non trovato!"
-          echo "📁 File presenti nella directory:"
-          ls -la
-          exit 1
-        fi
-        
-        # Avvia il monitor
-        python github_monitor.py || {
-          echo "❌ Errore durante l'esecuzione del monitor"
-          echo "🔍 Contenuto directory:"
-          ls -la
-          echo "📄 Contenuto visti.json:"
-          cat visti.json || echo "File visti.json non leggibile"
-          exit 1
-        }
-        
-    - name: Save state back to repository
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "💾 Salvataggio stato..."
-        
-        # Configura git
-        git config --local user.email "action@github.com"
-        git config --local user.name "RSS Monitor Bot"
-        
-        # Verifica se il file stato esiste e ha contenuto
-        if [ -f visti.json ] && [ -s visti.json ]; then
-          echo "📊 File stato da salvare:"
-          wc -l visti.json
-          
-          # Aggiungi il file
-          git add visti.json
-          
-          # Controlla se ci sono modifiche
-          if ! git diff --staged --quiet; then
-            # Crea commit con timestamp
-            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-            git commit -m "🤖 Update RSS monitor state - $TIMESTAMP [skip ci]"
-            
-            # Push con retry
-            for i in {1..3}; do
-              if git push; then
-                echo "✅ Stato salvato nel repository (tentativo $i)"
-                break
-              else
-                echo "⚠️  Tentativo $i fallito, riprovo..."
-                sleep $((i * 2))
-              fi
-            done
-          else
-            echo "📝 Nessuna modifica da salvare"
-          fi
-        else
-          echo "⚠️  File stato vuoto o mancante, non salvo"
-        fi
-        
-    - name: Cleanup and Summary
-      if: always()
-      run: |
-        echo ""
-        echo "📋 RIEPILOGO ESECUZIONE"
-        echo "======================"
-        echo "⏰ Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-        echo "📁 Repository: ${{ github.repository }}"
-        echo "🔄 Run ID: ${{ github.run_id }}"
-        echo "🌟 Prossima esecuzione: ~10 minuti"
-        
-        # Mostra statistiche file stato se esiste
-        if [ -f visti.json ]; then
-          TOTAL_LINKS=$(jq -r '.link_visti | length // 0' visti.json 2>/dev/null || echo "0")
-          echo "📊 Link tracciati: $TOTAL_LINKS"
-        fi
-        
-        echo "✅ Esecuzione completata"
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add -A
+        git diff --staged --quiet || git commit -m "Update RSS monitor data [$(date)]"
+        git push
