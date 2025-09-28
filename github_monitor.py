@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -- coding: utf-8 --
+# -*- coding: utf-8 -*-
 """
 RSS Feed Monitor per GitHub Actions
 Versione ottimizzata con fix definitivo per duplicati Instagram
@@ -23,7 +23,7 @@ import urllib.parse as urlparse
 # Token e Chat ID da GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+PERSONAL_TOKEN = os.getenv("PERSONAL_TOKEN", "")  # Cambiato da GITHUB_TOKEN
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 # File per lo stato
@@ -255,13 +255,17 @@ def carica_link_visti():
     """Carica i fingerprint già visti dal file JSON locale o da GitHub Gist."""
     log_message("🔍 DEBUG: Inizio caricamento fingerprints...")
     
-    # Prima prova a caricare da GitHub Gist (persistente)
-    fingerprints_da_gist = carica_da_gist()
-    if fingerprints_da_gist:
-        log_message(f"☁ DEBUG: Caricati {len(fingerprints_da_gist)} da Gist")
-        return fingerprints_da_gist
+    # Prima prova a caricare da GitHub Gist (solo se configurato)
+    gist_id = os.getenv('GIST_ID', '')
+    if PERSONAL_TOKEN and gist_id:
+        fingerprints_da_gist = carica_da_gist()
+        if fingerprints_da_gist:
+            log_message(f"☁️ DEBUG: Caricati {len(fingerprints_da_gist)} da Gist")
+            return fingerprints_da_gist
+    else:
+        log_message("ℹ️ Gist non configurato - uso solo file locale")
     
-    # Se non c'è Gist, prova il file locale
+    # Carica dal file locale
     if not os.path.exists(FILE_VISTI):
         log_message(f"📁 DEBUG: File {FILE_VISTI} non trovato - primo avvio")
         return set()
@@ -291,14 +295,14 @@ def carica_link_visti():
                     log_message(f"📅 DEBUG: Dati di {giorni_fa} giorni fa")
                     
                     if giorni_fa > 7:
-                        log_message(f"⚠ Dati vecchi di {giorni_fa} giorni - reset parziale")
+                        log_message(f"⚠️ Dati vecchi di {giorni_fa} giorni - reset parziale")
                         # Per Instagram, mantieni più fingerprints per sicurezza
                         instagram_fps = [fp for fp in fingerprints if fp.startswith('ig_')]
                         altri_fps = [fp for fp in fingerprints if not fp.startswith('ig_')]
                         
                         # Mantieni tutti gli Instagram + ultimi 100 altri
                         fingerprints_puliti = set(instagram_fps + altri_fps[-100:])
-                        log_message(f"🗑 DEBUG: Mantenuti {len(instagram_fps)} Instagram + {len(altri_fps[-100:])} altri")
+                        log_message(f"🗑️ DEBUG: Mantenuti {len(instagram_fps)} Instagram + {len(altri_fps[-100:])} altri")
                         return fingerprints_puliti
                 except Exception as e:
                     log_message(f"❌ DEBUG: Errore parsing data: {e}")
@@ -379,20 +383,22 @@ def salva_su_gist(data):
         
         response = requests.patch(url, headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
-            log_message("☁ Dati sincronizzati con GitHub Gist")
+            log_message("☁️ Dati sincronizzati con GitHub Gist")
         else:
-            log_message(f"⚠ Errore sync Gist: {response.status_code}")
+            log_message(f"⚠️ Errore sync Gist: {response.status_code}")
             
     except Exception as e:
-        log_message(f"⚠ Errore sincronizzazione Gist: {e}")
+        log_message(f"⚠️ Errore sincronizzazione Gist: {e}")
 
 def carica_da_gist():
     """Carica i dati da GitHub Gist se disponibile."""
     if not GITHUB_TOKEN:
+        log_message("⚠️ GitHub token non disponibile - skip Gist")
         return set()
         
     gist_id = os.getenv('GIST_ID', '')
     if not gist_id:
+        log_message("⚠️ GIST_ID non configurato - skip Gist")
         return set()
         
     try:
@@ -402,7 +408,9 @@ def carica_da_gist():
             'Accept': 'application/vnd.github.v3+json'
         }
         
+        log_message(f"☁️ Tentativo caricamento da Gist: {gist_id[:8]}...")
         response = requests.get(url, headers=headers, timeout=10)
+        
         if response.status_code == 200:
             gist_data = response.json()
             if 'visti.json' in gist_data['files']:
@@ -410,13 +418,69 @@ def carica_da_gist():
                 data = json.loads(content)
                 fingerprints = set(data.get('fingerprints_visti', []))
                 if fingerprints:
-                    log_message(f"☁ Caricati {len(fingerprints)} fingerprints da GitHub Gist")
+                    log_message(f"☁️ Caricati {len(fingerprints)} fingerprints da GitHub Gist")
                     return fingerprints
+            else:
+                log_message("⚠️ File visti.json non trovato nel Gist")
+        elif response.status_code == 404:
+                            log_message("⚠️ Gist non trovato (404) - possibile configurazione errata")
+        elif response.status_code == 401:
+            log_message("⚠️ Token GitHub non valido o scaduto (401)")
+        elif response.status_code == 403:
+            log_message("⚠️ Token GitHub senza permessi gist (403)")
+        else:
+            log_message(f"⚠️ Errore Gist: {response.status_code}")
                 
+    except requests.exceptions.RequestException as e:
+        log_message(f"⚠️ Errore connessione Gist: {e}")
     except Exception as e:
-        log_message(f"⚠ Errore caricamento da Gist: {e}")
+        log_message(f"⚠️ Errore generico Gist: {e}")
         
     return set()
+
+def salva_su_gist(data):
+    """Salva i dati su GitHub Gist per persistenza tra le esecuzioni."""
+    if not GITHUB_TOKEN:
+        log_message("ℹ️ GitHub token non disponibile - skip salvataggio Gist")
+        return
+        
+    gist_id = os.getenv('GIST_ID', '')
+    if not gist_id:
+        log_message("ℹ️ GIST_ID non configurato - skip salvataggio Gist")
+        return
+        
+    try:
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'files': {
+                'visti.json': {
+                    'content': json.dumps(data, ensure_ascii=False, indent=2)
+                }
+            }
+        }
+        
+        log_message(f"☁️ Tentativo sync con Gist: {gist_id[:8]}...")
+        response = requests.patch(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            log_message("☁️ Dati sincronizzati con GitHub Gist")
+        elif response.status_code == 404:
+            log_message("⚠️ Gist non trovato per salvataggio - verifica GIST_ID")
+        elif response.status_code == 401:
+            log_message("⚠️ Token GitHub non valido per salvataggio")
+        elif response.status_code == 403:
+            log_message("⚠️ Token GitHub senza permessi gist per salvataggio")
+        else:
+            log_message(f"⚠️ Errore salvataggio Gist: {response.status_code}")
+            
+    except Exception as e:
+        log_message(f"⚠️ Errore sincronizzazione Gist: {e}")
 
 def invia_messaggio_telegram(messaggio):
     """Invia un messaggio su Telegram."""
@@ -466,7 +530,7 @@ def trova_url_funzionante(feed_info):
     if "rsshub" in feed_info['url']:
         return prova_rsshub_instances(feed_info['url'])
     
-    log_message(f"⚠ Nessun URL funzionante per {feed_info['name']}")
+    log_message(f"⚠️ Nessun URL funzionante per {feed_info['name']}")
     return feed_info['url']
 
 def prova_rsshub_instances(url_originale):
@@ -485,7 +549,7 @@ def prova_rsshub_instances(url_originale):
             log_message(f"❌ Errore testando {instance}: {e}")
             continue
     
-    log_message("⚠ Nessuna istanza RSSHub disponibile")
+    log_message("⚠️ Nessuna istanza RSSHub disponibile")
     return url_originale
 
 def pulisci_contenuto_instagram(titolo, link):
@@ -562,7 +626,7 @@ def controlla_feed(feed_info, fingerprints_visti):
             
             # Controllo duplicati più rigoroso per Instagram
             if fingerprint in fingerprints_visti:
-                log_message(f"⏭ DEBUG: SKIP duplicato - {fingerprint}")
+                log_message(f"⏭️ DEBUG: SKIP duplicato - {fingerprint}")
                 
                 # Per Instagram, controllo aggiuntivo con titolo simile
                 if 'instagram' in feed_type:
@@ -583,11 +647,11 @@ def controlla_feed(feed_info, fingerprints_visti):
             if pub_date:
                 entry_date = datetime(*pub_date[:6])
                 if entry_date < filtro_temporale:
-                    log_message(f"⏭ Skip contenuto vecchio: {entry_date.strftime('%d/%m/%Y %H:%M')}")
+                    log_message(f"⏭️ Skip contenuto vecchio: {entry_date.strftime('%d/%m/%Y %H:%M')}")
                     continue
                 log_message(f"📅 Contenuto del: {entry_date.strftime('%d/%m/%Y %H:%M')}")
             elif primo_avvio:
-                log_message(f"⏭ Skip contenuto senza data (primo avvio)")
+                log_message(f"⏭️ Skip contenuto senza data (primo avvio)")
                 continue
             
             # Pulisci contenuto
@@ -621,7 +685,7 @@ def controlla_feed(feed_info, fingerprints_visti):
         log_message(f"❌ Errore di rete per {feed_info['name']}: {e}", "ERROR")
         if 'instagram' in feed_info.get('type', ''):
             invia_messaggio_telegram(
-                f"⚠ <b>{feed_info['name']}</b>\n\n"
+                f"⚠️ <b>{feed_info['name']}</b>\n\n"
                 f"❌ Feed Instagram non disponibile\n"
                 f"💡 Considera di usare RSS.app o Feedity\n"
                 f"🔗 https://rss.app/rss-feed/create-instagram-rss-feed"
@@ -645,7 +709,7 @@ def invia_report_stato():
         f"📡 {feeds_attivi} feed monitorati\n"
         f"📸 {feeds_instagram} feed Instagram (anti-duplicati migliorato)\n"
         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-        f"🛡 Sistema anti-duplicati specifico per Instagram\n"
+        f"🛡️ Sistema anti-duplicati specifico per Instagram\n"
         f"🎯 Fingerprint basati su ID post quando disponibili\n"
         f"⏰ Invio in ordine cronologico\n"
         f"🔧 Filtro temporale: 3 giorni per Instagram, 2 per altri"
@@ -701,7 +765,7 @@ def main():
         return
     
     # FASE 2: Ordinamento cronologico
-    log_message("🗂 FASE 2: Ordinamento cronologico...")
+    log_message("🗂️ FASE 2: Ordinamento cronologico...")
     
     def ordina_per_data(contenuto):
         data = contenuto['data_pub']
@@ -753,11 +817,11 @@ def main():
     log_message("🎯 Sistema anti-duplicati Instagram attivo")
     log_message("=" * 60)
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log_message("⏹ Interruzione manuale")
+        log_message("⏹️ Interruzione manuale")
         sys.exit(0)
     except Exception as e:
         log_message(f"💥 Errore critico: {e}", "ERROR")
