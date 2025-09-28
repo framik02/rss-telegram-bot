@@ -1,10 +1,8 @@
-
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 RSS Feed Monitor per GitHub Actions
-Versione ottimizzata con fix per Instagram
+Versione ottimizzata con fix per Instagram e anti-duplicati
 """
 
 import requests
@@ -15,6 +13,8 @@ import sys
 import time
 from datetime import datetime, timedelta
 import re
+import hashlib
+import urllib.parse as urlparse
 
 # ================================
 # CONFIGURAZIONE
@@ -102,7 +102,58 @@ REQUEST_HEADERS = {
 }
 
 # ================================
-# FUNZIONI UTILITY
+# FUNZIONI ANTI-DUPLICATI
+# ================================
+
+def normalizza_url(url):
+    """Rimuove parametri casuali dall'URL per evitare duplicati."""
+    try:
+        parsed = urlparse.urlparse(url)
+        query = urlparse.parse_qs(parsed.query)
+        
+        # Rimuovi parametri tracking che cambiano sempre
+        parametri_da_rimuovere = [
+            'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+            'fbclid', '_ga', 'gclid', 'mc_cid', 'mc_eid', 'ref', 'source',
+            '_hsenc', '_hsmi', 'hsCtaTracking', 'mkt_tok', 'trk'
+        ]
+        
+        for param in parametri_da_rimuovere:
+            query.pop(param, None)
+        
+        # Ricostruisci URL pulito
+        clean_query = urlparse.urlencode(query, doseq=True)
+        clean_url = urlparse.urlunparse((
+            parsed.scheme, parsed.netloc, parsed.path,
+            parsed.params, clean_query, parsed.fragment
+        ))
+        return clean_url
+    except:
+        return url  # Ritorna originale se c'è un errore
+
+def genera_fingerprint(titolo, url):
+    """Genera fingerprint unico per il contenuto basato su titolo + URL normalizzato."""
+    try:
+        # Normalizza URL
+        url_pulito = normalizza_url(url)
+        
+        # Pulisci titolo
+        titolo_pulito = re.sub(r'[^\w\s]', ' ', titolo.lower().strip())
+        titolo_pulito = re.sub(r'\s+', ' ', titolo_pulito)  # Rimuovi spazi multipli
+        
+        # Crea contenuto per hash
+        contenuto = f"{titolo_pulito}|{url_pulito}"
+        
+        # Genera hash MD5 (primi 12 caratteri bastano)
+        fingerprint = hashlib.md5(contenuto.encode('utf-8')).hexdigest()[:12]
+        
+        return fingerprint
+    except:
+        # Fallback: usa solo URL se c'è un errore
+        return hashlib.md5(url.encode('utf-8')).hexdigest()[:12]
+
+# ================================
+# FUNZIONI UTILITY (INVARIATE)
 # ================================
 
 def log_message(message, level="INFO"):
@@ -128,11 +179,11 @@ def verifica_configurazione():
     return True
 
 def carica_link_visti():
-    """Carica i link già visti dal file JSON locale o da GitHub Gist."""
+    """Carica i fingerprint già visti dal file JSON locale o da GitHub Gist."""
     # Prima prova a caricare da GitHub Gist (persistente)
-    link_da_gist = carica_da_gist()
-    if link_da_gist:
-        return link_da_gist
+    fingerprints_da_gist = carica_da_gist()
+    if fingerprints_da_gist:
+        return fingerprints_da_gist
     
     # Se non c'è Gist, prova il file locale
     if not os.path.exists(FILE_VISTI):
@@ -149,7 +200,18 @@ def carica_link_visti():
             if not content:
                 return set()
             data = json.loads(content)
-            links = set(data.get('link_visti', []))
+            
+            # Carica fingerprints (nuovo formato) o link (vecchio formato per compatibilità)
+            fingerprints = set(data.get('fingerprints_visti', []))
+            if not fingerprints:
+                # Fallback a vecchio formato
+                old_links = set(data.get('link_visti', []))
+                if old_links:
+                    log_message(f"🔄 Conversione da vecchio formato: {len(old_links)} link")
+                    # Genera fingerprints dai vecchi link
+                    for link in old_links:
+                        fp = hashlib.md5(link.encode('utf-8')).hexdigest()[:12]
+                        fingerprints.add(fp)
             
             # Controlla età dei dati
             ultimo_aggiornamento = data.get('ultimo_aggiornamento', '')
@@ -159,33 +221,34 @@ def carica_link_visti():
                     giorni_fa = (datetime.now() - ultima_data.replace(tzinfo=None)).days
                     if giorni_fa > 7:
                         log_message(f"⚠️ Dati vecchi di {giorni_fa} giorni - reset parziale")
-                        # Mantieni solo link recenti (simulazione)
-                        return set(list(links)[-100:]) if len(links) > 100 else links
+                        # Mantieni solo fingerprints recenti
+                        return set(list(fingerprints)[-200:]) if len(fingerprints) > 200 else fingerprints
                 except:
                     pass
             
-            log_message(f"📂 Caricati {len(links)} link già processati")
-            return links
+            log_message(f"📂 Caricati {len(fingerprints)} fingerprints già processati")
+            return fingerprints
     except Exception as e:
         log_message(f"❌ Errore nel leggere {FILE_VISTI}: {e}", "ERROR")
         return set()
 
-def salva_link_visti(link_visti):
-    """Salva i link visti nel file JSON locale con gestione GitHub Gist."""
+def salva_link_visti(fingerprints_visti):
+    """Salva i fingerprints visti nel file JSON locale con gestione GitHub Gist."""
     try:
         data = {
             'ultimo_aggiornamento': datetime.now().isoformat(),
-            'totale_link': len(link_visti),
-            'link_visti': sorted(list(link_visti)),
+            'totale_fingerprints': len(fingerprints_visti),
+            'fingerprints_visti': sorted(list(fingerprints_visti)),
             'github_action': True,
             'repository': os.getenv('GITHUB_REPOSITORY', 'unknown'),
-            'run_id': os.getenv('GITHUB_RUN_ID', 'unknown')
+            'run_id': os.getenv('GITHUB_RUN_ID', 'unknown'),
+            'versione': '2.0_anti_duplicati'
         }
         
         # Salva localmente
         with open(FILE_VISTI, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        log_message(f"💾 Salvati {len(link_visti)} link nel file {FILE_VISTI}")
+        log_message(f"💾 Salvati {len(fingerprints_visti)} fingerprints nel file {FILE_VISTI}")
         
         # Prova a sincronizzare con GitHub Gist per persistenza
         salva_su_gist(data)
@@ -251,9 +314,10 @@ def carica_da_gist():
             if 'visti.json' in gist_data['files']:
                 content = gist_data['files']['visti.json']['content']
                 data = json.loads(content)
-                links = set(data.get('link_visti', []))
-                log_message(f"☁️ Caricati {len(links)} link da GitHub Gist")
-                return links
+                fingerprints = set(data.get('fingerprints_visti', []))
+                if fingerprints:
+                    log_message(f"☁️ Caricati {len(fingerprints)} fingerprints da GitHub Gist")
+                    return fingerprints
                 
     except Exception as e:
         log_message(f"⚠️ Errore caricamento da Gist: {e}")
@@ -342,11 +406,12 @@ def pulisci_contenuto_instagram(titolo, link):
     
     return titolo_pulito
 
-def controlla_feed(feed_info, link_visti):
-    """Controlla un singolo feed per nuovi contenuti."""
+def controlla_feed(feed_info, fingerprints_visti):
+    """Controlla un singolo feed per nuovi contenuti con sistema anti-duplicati."""
     nuovi_contenuti = []
     try:
         log_message(f"🔍 Controllo {feed_info.get('type', 'rss')}: {feed_info['name']}")
+        log_message(f"📊 Fingerprints già visti: {len(fingerprints_visti)}")
         
         # Trova URL funzionante
         feed_url = trova_url_funzionante(feed_info)
@@ -365,7 +430,7 @@ def controlla_feed(feed_info, link_visti):
         due_giorni_fa = datetime.now() - timedelta(days=2)
         
         # Primo avvio: prendi solo ultimo elemento per feed per evitare spam
-        primo_avvio = len(link_visti) == 0
+        primo_avvio = "primo_avvio" in str(fingerprints_visti)
         contenuti_processati = 0
         
         # Ordina per data (più recenti prima)
@@ -382,7 +447,16 @@ def controlla_feed(feed_info, link_visti):
             link = getattr(entry, 'link', '').strip()
             titolo = getattr(entry, 'title', 'Titolo non disponibile').strip()
             
-            if not link or link in link_visti:
+            if not link:
+                continue
+            
+            # GENERA FINGERPRINT ANTI-DUPLICATI
+            fingerprint = genera_fingerprint(titolo, link)
+            log_message(f"🔗 Controllo contenuto: {titolo[:50]}... | FP: {fingerprint}")
+            
+            # Controlla se già visto (usando fingerprint invece di link)
+            if fingerprint in fingerprints_visti:
+                log_message(f"⏭️ SKIP - Fingerprint già visto: {fingerprint}")
                 continue
             
             # CONTROLLO DATA RIGOROSO
@@ -420,9 +494,15 @@ def controlla_feed(feed_info, link_visti):
                 data_pub = datetime(*pub_date[:6]).strftime("%d/%m/%Y %H:%M")
                 messaggio += f"\n📅 {data_pub}"
             
-            nuovi_contenuti.append({'link': link, 'messaggio': messaggio})
-            link_visti.add(link)
+            # Aggiungi fingerprint per debug (solo in modalità test)
+            if TEST_MODE:
+                messaggio += f"\n🔍 FP: {fingerprint}"
+            
+            nuovi_contenuti.append({'fingerprint': fingerprint, 'messaggio': messaggio})
+            fingerprints_visti.add(fingerprint)
             contenuti_processati += 1
+            
+            log_message(f"✅ NUOVO contenuto aggiunto: FP {fingerprint}")
         
         if primo_avvio and contenuti_processati > 0:
             log_message(f"🎯 Primo avvio: {contenuti_processati} contenuto inizializzato per {feed_info['name']}")
@@ -454,10 +534,11 @@ def invia_report_stato():
     
     report = (
         f"📊 <b>RSS Monitor - Report Stato</b>\n\n"
-        f"✅ Monitor attivo\n"
+        f"✅ Monitor attivo (v2.0 Anti-Duplicati)\n"
         f"📡 {feeds_attivi} feed monitorati\n"
         f"📸 {feeds_instagram} feed Instagram\n"
         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+        f"🛡️ Sistema anti-duplicati attivo\n"
         f"ℹ️ I feed Instagram potrebbero richiedere configurazione aggiuntiva"
     )
     
@@ -465,7 +546,7 @@ def invia_report_stato():
 
 def main():
     log_message("=" * 60)
-    log_message("🤖 RSS FEED MONITOR - GitHub Actions (Instagram Fixed)")
+    log_message("🤖 RSS FEED MONITOR v2.0 - Anti-Duplicati")
     log_message("=" * 60)
     log_message(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log_message(f"📋 Monitoraggio {len(FEEDS_DA_MONITORARE)} feed")
@@ -476,11 +557,11 @@ def main():
     
     if TEST_MODE:
         log_message("🧪 Modalità test attivata")
-        invia_messaggio_telegram("🧪 Test RSS Monitor (Instagram Fixed) completato con successo ✅")
+        invia_messaggio_telegram("🧪 Test RSS Monitor v2.0 (Anti-Duplicati) completato con successo ✅")
         invia_report_stato()
         return
     
-    link_visti = carica_link_visti()
+    fingerprints_visti = carica_link_visti()
     nuovi_contenuti_totali = 0
     
     # Invia report di stato ogni tanto (es. una volta al giorno)
@@ -489,17 +570,17 @@ def main():
         invia_report_stato()
     
     for feed_info in FEEDS_DA_MONITORARE:
-        nuovi_contenuti = controlla_feed(feed_info, link_visti)
+        nuovi_contenuti = controlla_feed(feed_info, fingerprints_visti)
         for contenuto in nuovi_contenuti:
             if invia_messaggio_telegram(contenuto['messaggio']):
                 nuovi_contenuti_totali += 1
                 time.sleep(2)  # Pausa più lunga per evitare rate limiting
     
-    salva_link_visti(link_visti)
+    salva_link_visti(fingerprints_visti)
     
     log_message("=" * 60)
     log_message(f"📤 {nuovi_contenuti_totali} nuovi contenuti inviati")
-    log_message(f"💾 {len(link_visti)} link tracciati")
+    log_message(f"💾 {len(fingerprints_visti)} fingerprints tracciati")
     
     # Messaggio finale se non ci sono nuovi contenuti
     if nuovi_contenuti_totali == 0:
@@ -517,5 +598,5 @@ if __name__ == "__main__":
         log_message(f"💥 Errore critico: {e}", "ERROR")
         # Invia notifica di errore critico
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-            invia_messaggio_telegram(f"🚨 <b>RSS Monitor - Errore Critico</b>\n\n❌ {str(e)}")
+            invia_messaggio_telegram(f"🚨 <b>RSS Monitor v2.0 - Errore Critico</b>\n\n❌ {str(e)}")
         sys.exit(1)
