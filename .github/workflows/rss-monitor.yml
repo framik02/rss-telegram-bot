@@ -13,12 +13,14 @@ jobs:
       
     - name: Debug - List files
       run: |
-        echo "📁 Current directory:"
+        echo "Current directory:"
         pwd
-        echo "📋 Files in current directory:"
+        echo "Files in current directory:"
         ls -la
-        echo "🔍 Looking for Python files:"
+        echo "Looking for Python files:"
         find . -name "*.py" -type f
+        echo "All files recursively:"
+        find . -type f
         
     - name: Setup Python
       uses: actions/setup-python@v4
