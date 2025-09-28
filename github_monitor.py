@@ -23,7 +23,7 @@ import urllib.parse as urlparse
 # Token e Chat ID da GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-PERSONAL_TOKEN = os.getenv("PERSONAL_TOKEN", "")  # Cambiato da GITHUB_TOKEN
+PERSONAL_TOKEN = os.getenv("PERSONAL_TOKEN", "")  # Cambiato da PERSONAL_TOKEN
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 # File per lo stato
@@ -356,7 +356,7 @@ def salva_link_visti(fingerprints_visti):
 
 def salva_su_gist(data):
     """Salva i dati su GitHub Gist per persistenza tra le esecuzioni."""
-    if not GITHUB_TOKEN:
+    if not PERSONAL_TOKEN:
         return
         
     gist_id = os.getenv('GIST_ID', '')
@@ -366,7 +366,7 @@ def salva_su_gist(data):
     try:
         url = f"https://api.github.com/gists/{gist_id}"
         headers = {
-            'Authorization': f'token {GITHUB_TOKEN}',
+            'Authorization': f'token {PERSONAL_TOKEN}',
             'Accept': 'application/vnd.github.v3+json',
             'Content-Type': 'application/json'
         }
@@ -390,7 +390,7 @@ def salva_su_gist(data):
 
 def carica_da_gist():
     """Carica i dati da GitHub Gist se disponibile."""
-    if not GITHUB_TOKEN:
+    if not PERSONAL_TOKEN:
         log_message("⚠️ GitHub token non disponibile - skip Gist")
         return set()
         
@@ -402,7 +402,7 @@ def carica_da_gist():
     try:
         url = f"https://api.github.com/gists/{gist_id}"
         headers = {
-            'Authorization': f'token {GITHUB_TOKEN}',
+            'Authorization': f'token {PERSONAL_TOKEN}',
             'Accept': 'application/vnd.github.v3+json'
         }
         
@@ -438,7 +438,7 @@ def carica_da_gist():
 
 def salva_su_gist(data):
     """Salva i dati su GitHub Gist per persistenza tra le esecuzioni."""
-    if not GITHUB_TOKEN:
+    if not PERSONAL_TOKEN:
         log_message("ℹ️ GitHub token non disponibile - skip salvataggio Gist")
         return
         
@@ -450,7 +450,7 @@ def salva_su_gist(data):
     try:
         url = f"https://api.github.com/gists/{gist_id}"
         headers = {
-            'Authorization': f'token {GITHUB_TOKEN}',
+            'Authorization': f'token {PERSONAL_TOKEN}',
             'Accept': 'application/vnd.github.v3+json',
             'Content-Type': 'application/json'
         }
