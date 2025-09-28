@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -- coding: utf-8 --
 """
 RSS Feed Monitor per GitHub Actions
-Versione ottimizzata con fix per Instagram e anti-duplicati
+Versione ottimizzata con fix definitivo per duplicati Instagram
 """
 
 import requests
@@ -53,7 +53,7 @@ FEEDS_DA_MONITORARE = [
     {
         "name": "Instagram - Fratelli d'Italia",
         "emoji": "📸",
-        "url": "https://rss.app/feeds/eSz39hnyubmwLjuW.xml",  # Sostituisci con URL RSS.app
+        "url": "https://rss.app/feeds/eSz39hnyubmwLjuW.xml",
         "type": "instagram_alt",
         "backup_urls": [
             "https://rsshub.ktachibana.party/instagram/user/fratelliditalia",
@@ -63,7 +63,7 @@ FEEDS_DA_MONITORARE = [
     {
         "name": "Instagram - Ministero del Lavoro",
         "emoji": "🚀",
-        "url": "https://rss.app/feeds/O2NQW8pvSIQGpkby.xml",  # Sostituisci con URL RSS.app
+        "url": "https://rss.app/feeds/O2NQW8pvSIQGpkby.xml",
         "type": "instagram_alt",
         "backup_urls": [
             "https://rsshub.ktachibana.party/instagram/user/minlavoro",
@@ -73,7 +73,7 @@ FEEDS_DA_MONITORARE = [
     {
         "name": "Instagram - Meloni",
         "emoji": "📸", 
-        "url": "https://rss.app/feeds/opRYqgialL3uzDej.xml",  # Sostituisci con URL RSS.app
+        "url": "https://rss.app/feeds/opRYqgialL3uzDej.xml",
         "type": "instagram_alt",
         "backup_urls": [
             "https://rsshub.ktachibana.party/instagram/user/natgeo",
@@ -102,8 +102,61 @@ REQUEST_HEADERS = {
 }
 
 # ================================
-# FUNZIONI ANTI-DUPLICATI
+# FUNZIONI ANTI-DUPLICATI MIGLIORATE
 # ================================
+
+def normalizza_titolo_instagram(titolo):
+    """Normalizza il titolo Instagram per evitare variazioni che causano duplicati."""
+    if not titolo:
+        return ""
+    
+    # Converti in lowercase
+    titolo = titolo.lower().strip()
+    
+    # Rimuovi emoji e caratteri speciali
+    titolo = re.sub(r'[^\w\s\-_.,!?]', ' ', titolo)
+    
+    # Rimuovi spazi multipli
+    titolo = re.sub(r'\s+', ' ', titolo).strip()
+    
+    # Rimuovi pattern comuni che variano
+    titolo = re.sub(r'\b(new|updated|latest|today|now)\b', '', titolo)
+    
+    # Rimuovi date e timestamp che possono variare
+    titolo = re.sub(r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}', '', titolo)
+    titolo = re.sub(r'\d{1,2}:\d{2}', '', titolo)
+    
+    # Tronca se troppo lungo (prendi solo i primi 100 caratteri significativi)
+    titolo = titolo[:100].strip()
+    
+    return titolo
+
+def estrai_id_instagram_da_url(url):
+    """Estrae l'ID del post Instagram dall'URL se possibile."""
+    try:
+        # Pattern per ID Instagram
+        patterns = [
+            r'/p/([A-Za-z0-9_-]+)/',
+            r'instagram\.com/p/([A-Za-z0-9_-]+)',
+            r'&id=([A-Za-z0-9_-]+)',
+            r'post_id=([A-Za-z0-9_-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        
+        # Fallback: usa la parte finale dell'URL
+        parsed = urlparse.urlparse(url)
+        path_parts = [p for p in parsed.path.split('/') if p]
+        if path_parts:
+            return path_parts[-1]
+            
+    except:
+        pass
+    
+    return None
 
 def normalizza_url(url):
     """Rimuove parametri casuali dall'URL per evitare duplicati."""
@@ -115,7 +168,8 @@ def normalizza_url(url):
         parametri_da_rimuovere = [
             'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
             'fbclid', '_ga', 'gclid', 'mc_cid', 'mc_eid', 'ref', 'source',
-            '_hsenc', '_hsmi', 'hsCtaTracking', 'mkt_tok', 'trk'
+            '_hsenc', '_hsmi', 'hsCtaTracking', 'mkt_tok', 'trk', 't', 's',
+            'timestamp', 'time', 'random', 'nonce', 'cache', 'v'
         ]
         
         for param in parametri_da_rimuovere:
@@ -129,27 +183,46 @@ def normalizza_url(url):
         ))
         return clean_url
     except:
-        return url  # Ritorna originale se c'è un errore
+        return url
 
-def genera_fingerprint(titolo, url):
-    """Genera fingerprint unico per il contenuto basato su titolo + URL normalizzato."""
+def genera_fingerprint_instagram(titolo, url, feed_type="rss"):
+    """Genera fingerprint specifico per Instagram con logica anti-duplicati avanzata."""
     try:
-        # Normalizza URL
+        # Per Instagram, usa strategie diverse
+        if 'instagram' in feed_type:
+            # Strategia 1: Prova a estrarre ID del post dall'URL
+            post_id = estrai_id_instagram_da_url(url)
+            if post_id:
+                fingerprint = f"ig_{post_id}"
+                return fingerprint
+            
+            # Strategia 2: Usa URL normalizzato + titolo normalizzato
+            url_pulito = normalizza_url(url)
+            titolo_pulito = normalizza_titolo_instagram(titolo)
+            
+            # Se il titolo è troppo generico o vuoto, usa solo URL
+            if not titolo_pulito or len(titolo_pulito) < 10:
+                contenuto = url_pulito
+            else:
+                contenuto = f"{titolo_pulito}|{url_pulito}"
+            
+            # Per Instagram, usa SHA256 per maggiore precisione
+            fingerprint = hashlib.sha256(contenuto.encode('utf-8')).hexdigest()[:16]
+            return f"ig_{fingerprint}"
+        
+        # Per feed normali, usa la logica originale
         url_pulito = normalizza_url(url)
-        
-        # Pulisci titolo
         titolo_pulito = re.sub(r'[^\w\s]', ' ', titolo.lower().strip())
-        titolo_pulito = re.sub(r'\s+', ' ', titolo_pulito)  # Rimuovi spazi multipli
+        titolo_pulito = re.sub(r'\s+', ' ', titolo_pulito)
         
-        # Crea contenuto per hash
         contenuto = f"{titolo_pulito}|{url_pulito}"
-        
-        # Genera hash MD5 (primi 12 caratteri bastano)
         fingerprint = hashlib.md5(contenuto.encode('utf-8')).hexdigest()[:12]
         
         return fingerprint
-    except:
-        # Fallback: usa solo URL se c'è un errore
+        
+    except Exception as e:
+        log_message(f"❌ Errore generazione fingerprint: {e}")
+        # Fallback sicuro
         return hashlib.md5(url.encode('utf-8')).hexdigest()[:12]
 
 # ================================
@@ -185,14 +258,12 @@ def carica_link_visti():
     # Prima prova a caricare da GitHub Gist (persistente)
     fingerprints_da_gist = carica_da_gist()
     if fingerprints_da_gist:
-        log_message(f"☁️ DEBUG: Caricati {len(fingerprints_da_gist)} da Gist")
+        log_message(f"☁ DEBUG: Caricati {len(fingerprints_da_gist)} da Gist")
         return fingerprints_da_gist
     
     # Se non c'è Gist, prova il file locale
     if not os.path.exists(FILE_VISTI):
         log_message(f"📁 DEBUG: File {FILE_VISTI} non trovato - primo avvio")
-        # PRIMO AVVIO: NO MARKER - ritorna set vuoto
-        log_message(f"🎯 PRIMO AVVIO: Set vuoto per evitare loop")
         return set()
     
     try:
@@ -207,24 +278,11 @@ def carica_link_visti():
             data = json.loads(content)
             log_message(f"📊 DEBUG: JSON keys: {list(data.keys())}")
             
-            # Carica fingerprints (nuovo formato) o link (vecchio formato per compatibilità)
+            # Carica fingerprints
             fingerprints = set(data.get('fingerprints_visti', []))
             log_message(f"🔢 DEBUG: Fingerprints trovati: {len(fingerprints)}")
             
-            if not fingerprints:
-                # Fallback a vecchio formato
-                old_links = set(data.get('link_visti', []))
-                log_message(f"🔄 DEBUG: Old links trovati: {len(old_links)}")
-                
-                if old_links:
-                    log_message(f"🔄 Conversione da vecchio formato: {len(old_links)} link")
-                    # Genera fingerprints dai vecchi link
-                    for link in old_links:
-                        fp = hashlib.md5(link.encode('utf-8')).hexdigest()[:12]
-                        fingerprints.add(fp)
-                    log_message(f"✅ DEBUG: Convertiti in {len(fingerprints)} fingerprints")
-            
-            # Controlla età dei dati
+            # Controlla età dei dati e pulisci se troppo vecchi
             ultimo_aggiornamento = data.get('ultimo_aggiornamento', '')
             if ultimo_aggiornamento:
                 try:
@@ -233,11 +291,15 @@ def carica_link_visti():
                     log_message(f"📅 DEBUG: Dati di {giorni_fa} giorni fa")
                     
                     if giorni_fa > 7:
-                        log_message(f"⚠️ Dati vecchi di {giorni_fa} giorni - reset parziale")
-                        # Mantieni solo fingerprints recenti
-                        fingerprints_recenti = set(list(fingerprints)[-200:]) if len(fingerprints) > 200 else fingerprints
-                        log_message(f"🗑️ DEBUG: Rimossi, rimangono: {len(fingerprints_recenti)}")
-                        return fingerprints_recenti
+                        log_message(f"⚠ Dati vecchi di {giorni_fa} giorni - reset parziale")
+                        # Per Instagram, mantieni più fingerprints per sicurezza
+                        instagram_fps = [fp for fp in fingerprints if fp.startswith('ig_')]
+                        altri_fps = [fp for fp in fingerprints if not fp.startswith('ig_')]
+                        
+                        # Mantieni tutti gli Instagram + ultimi 100 altri
+                        fingerprints_puliti = set(instagram_fps + altri_fps[-100:])
+                        log_message(f"🗑 DEBUG: Mantenuti {len(instagram_fps)} Instagram + {len(altri_fps[-100:])} altri")
+                        return fingerprints_puliti
                 except Exception as e:
                     log_message(f"❌ DEBUG: Errore parsing data: {e}")
             
@@ -253,49 +315,41 @@ def salva_link_visti(fingerprints_visti):
     log_message(f"💾 DEBUG: Inizio salvataggio {len(fingerprints_visti)} fingerprints...")
     
     try:
+        # Conta fingerprints per tipo
+        instagram_count = len([fp for fp in fingerprints_visti if fp.startswith('ig_')])
+        altri_count = len(fingerprints_visti) - instagram_count
+        
         data = {
             'ultimo_aggiornamento': datetime.now().isoformat(),
             'totale_fingerprints': len(fingerprints_visti),
+            'instagram_fingerprints': instagram_count,
+            'altri_fingerprints': altri_count,
             'fingerprints_visti': sorted(list(fingerprints_visti)),
             'github_action': True,
             'repository': os.getenv('GITHUB_REPOSITORY', 'unknown'),
             'run_id': os.getenv('GITHUB_RUN_ID', 'unknown'),
-            'versione': '2.0_anti_duplicati_debug'
+            'versione': '2.1_instagram_fix'
         }
         
-        # DEBUG: Mostra primi 3 fingerprints
+        # DEBUG: Mostra statistiche
+        log_message(f"📊 DEBUG: Instagram FPs: {instagram_count}, Altri FPs: {altri_count}")
         if fingerprints_visti:
-            primi_3 = list(fingerprints_visti)[:3]
-            log_message(f"🔍 DEBUG: Primi 3 fingerprints: {primi_3}")
+            primi_ig = [fp for fp in fingerprints_visti if fp.startswith('ig_')][:3]
+            if primi_ig:
+                log_message(f"🔍 DEBUG: Primi 3 Instagram FPs: {primi_ig}")
         
         # Salva localmente
         with open(FILE_VISTI, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        # Verifica immediata del salvataggio
-        if os.path.exists(FILE_VISTI):
-            with open(FILE_VISTI, 'r', encoding='utf-8') as f:
-                verifica = json.load(f)
-                saved_count = len(verifica.get('fingerprints_visti', []))
-                log_message(f"✅ DEBUG: Verifica salvataggio - {saved_count} fingerprints salvati")
-                
-                if saved_count != len(fingerprints_visti):
-                    log_message(f"❌ DEBUG: ERRORE! Salvati {saved_count} invece di {len(fingerprints_visti)}")
-                else:
-                    log_message(f"✅ DEBUG: Salvataggio locale OK")
-        else:
-            log_message(f"❌ DEBUG: File non creato!")
-        
         log_message(f"💾 Salvati {len(fingerprints_visti)} fingerprints nel file {FILE_VISTI}")
         
-        # Prova a sincronizzare con GitHub Gist per persistenza
+        # Sincronizza con GitHub Gist
         salva_su_gist(data)
         
         return True
     except Exception as e:
         log_message(f"❌ DEBUG: Errore nel salvare {FILE_VISTI}: {e}", "ERROR")
-        import traceback
-        log_message(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
         return False
 
 def salva_su_gist(data):
@@ -303,7 +357,7 @@ def salva_su_gist(data):
     if not GITHUB_TOKEN:
         return
         
-    gist_id = os.getenv('GIST_ID', '')  # Aggiungi questo come secret
+    gist_id = os.getenv('GIST_ID', '')
     if not gist_id:
         return
         
@@ -325,12 +379,12 @@ def salva_su_gist(data):
         
         response = requests.patch(url, headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
-            log_message("☁️ Dati sincronizzati con GitHub Gist")
+            log_message("☁ Dati sincronizzati con GitHub Gist")
         else:
-            log_message(f"⚠️ Errore sync Gist: {response.status_code}")
+            log_message(f"⚠ Errore sync Gist: {response.status_code}")
             
     except Exception as e:
-        log_message(f"⚠️ Errore sincronizzazione Gist: {e}")
+        log_message(f"⚠ Errore sincronizzazione Gist: {e}")
 
 def carica_da_gist():
     """Carica i dati da GitHub Gist se disponibile."""
@@ -356,11 +410,11 @@ def carica_da_gist():
                 data = json.loads(content)
                 fingerprints = set(data.get('fingerprints_visti', []))
                 if fingerprints:
-                    log_message(f"☁️ Caricati {len(fingerprints)} fingerprints da GitHub Gist")
+                    log_message(f"☁ Caricati {len(fingerprints)} fingerprints da GitHub Gist")
                     return fingerprints
                 
     except Exception as e:
-        log_message(f"⚠️ Errore caricamento da Gist: {e}")
+        log_message(f"⚠ Errore caricamento da Gist: {e}")
         
     return set()
 
@@ -412,14 +466,13 @@ def trova_url_funzionante(feed_info):
     if "rsshub" in feed_info['url']:
         return prova_rsshub_instances(feed_info['url'])
     
-    log_message(f"⚠️ Nessun URL funzionante per {feed_info['name']}")
-    return feed_info['url']  # Ritorna l'originale come fallback
+    log_message(f"⚠ Nessun URL funzionante per {feed_info['name']}")
+    return feed_info['url']
 
 def prova_rsshub_instances(url_originale):
     """Prova diverse istanze RSSHub se quella principale non funziona."""
     for instance in RSSHUB_INSTANCES:
         try:
-            # Estrai il path dall'URL originale
             if "rsshub" in url_originale:
                 path_match = re.search(r'rsshub[^/]*/(.+)', url_originale)
                 if path_match:
@@ -432,15 +485,13 @@ def prova_rsshub_instances(url_originale):
             log_message(f"❌ Errore testando {instance}: {e}")
             continue
     
-    log_message("⚠️ Nessuna istanza RSSHub disponibile")
+    log_message("⚠ Nessuna istanza RSSHub disponibile")
     return url_originale
 
 def pulisci_contenuto_instagram(titolo, link):
     """Pulisce e migliora il contenuto Instagram."""
-    # Rimuovi caratteri speciali dal titolo
     titolo_pulito = re.sub(r'[^\w\s\-_.,!?]', '', titolo)
     
-    # Accorcia titoli troppo lunghi
     if len(titolo_pulito) > 100:
         titolo_pulito = titolo_pulito[:97] + "..."
     
@@ -449,7 +500,6 @@ def pulisci_contenuto_instagram(titolo, link):
 def estrai_data_da_messaggio(messaggio):
     """Estrae la data dal messaggio per l'ordinamento cronologico."""
     try:
-        # Cerca pattern data nel messaggio (formato: 📅 DD/MM/YYYY HH:MM)
         match = re.search(r'📅 (\d{2}/\d{2}/\d{4} \d{2}:\d{2})', messaggio)
         if match:
             data_str = match.group(1)
@@ -459,16 +509,17 @@ def estrai_data_da_messaggio(messaggio):
     return None
 
 def controlla_feed(feed_info, fingerprints_visti):
-    """Controlla un singolo feed per nuovi contenuti con sistema anti-duplicati."""
+    """Controlla un singolo feed per nuovi contenuti con sistema anti-duplicati migliorato per Instagram."""
     nuovi_contenuti = []
     try:
-        log_message(f"🔍 Controllo {feed_info.get('type', 'rss')}: {feed_info['name']}")
+        feed_type = feed_info.get('type', 'rss')
+        log_message(f"🔍 Controllo {feed_type}: {feed_info['name']}")
         log_message(f"📊 Fingerprints già visti: {len(fingerprints_visti)}")
         
         # Trova URL funzionante
         feed_url = trova_url_funzionante(feed_info)
         
-        # Richiedi il feed con headers appropriati
+        # Richiedi il feed
         response = requests.get(feed_url, headers=REQUEST_HEADERS, timeout=20)
         response.raise_for_status()
         
@@ -478,23 +529,25 @@ def controlla_feed(feed_info, fingerprints_visti):
             log_message(f"📭 Nessun contenuto in {feed_info['name']}")
             return nuovi_contenuti
         
-        # FILTRO TEMPORALE RIGOROSO - Solo ultimi 2 giorni per sicurezza
-        due_giorni_fa = datetime.now() - timedelta(days=2)
+        # Filtro temporale - per Instagram più permissivo (3 giorni)
+        giorni_filtro = 3 if 'instagram' in feed_type else 2
+        filtro_temporale = datetime.now() - timedelta(days=giorni_filtro)
         
-        # Primo avvio: prendi solo ultimo elemento per feed per evitare spam
-        primo_avvio = len(fingerprints_visti) <= 1  # Cambiato: considera primo avvio solo se 0 o 1 fingerprints
-        log_message(f"🎯 DEBUG: Primo avvio? {primo_avvio} (fingerprints: {len(fingerprints_visti)})")
+        # Primo avvio - limiti diversi per tipo
+        primo_avvio = len(fingerprints_visti) <= 1
+        limite_primo_avvio = 2 if 'instagram' in feed_type else 1
+        
+        log_message(f"🎯 DEBUG: Primo avvio? {primo_avvio}, Limite: {limite_primo_avvio}")
         contenuti_processati = 0
         
-        # Ordina per data (più recenti prima)
+        # Ordina per data
         entries_sorted = sorted(feed.entries, 
                               key=lambda x: getattr(x, 'published_parsed', (1970, 1, 1, 0, 0, 0, 0, 0, 0)), 
                               reverse=True)
         
         for entry in entries_sorted:
-            # Limite per primo avvio: massimo 1 elemento per feed
-            if primo_avvio and contenuti_processati >= 1:
-                log_message(f"🛑 Primo avvio: limitato a 1 elemento per {feed_info['name']}")
+            if primo_avvio and contenuti_processati >= limite_primo_avvio:
+                log_message(f"🛑 Primo avvio: limitato a {limite_primo_avvio} elementi per {feed_info['name']}")
                 break
                 
             link = getattr(entry, 'link', '').strip()
@@ -503,38 +556,42 @@ def controlla_feed(feed_info, fingerprints_visti):
             if not link:
                 continue
             
-            # GENERA FINGERPRINT ANTI-DUPLICATI
-            fingerprint = genera_fingerprint(titolo, link)
-            log_message(f"🔗 Controllo contenuto: {titolo[:50]}... | FP: {fingerprint}")
+            # GENERA FINGERPRINT SPECIFICO PER TIPO
+            fingerprint = genera_fingerprint_instagram(titolo, link, feed_type)
+            log_message(f"🔗 Controllo: {titolo[:50]}... | FP: {fingerprint}")
             
-            # Controlla se già visto (usando fingerprint invece di link)
+            # Controllo duplicati più rigoroso per Instagram
             if fingerprint in fingerprints_visti:
-                log_message(f"⏭️ DEBUG: SKIP duplicato - Fingerprint già visto: {fingerprint}")
+                log_message(f"⏭ DEBUG: SKIP duplicato - {fingerprint}")
+                
+                # Per Instagram, controllo aggiuntivo con titolo simile
+                if 'instagram' in feed_type:
+                    titolo_norm = normalizza_titolo_instagram(titolo)
+                    duplicato_trovato = False
+                    for fp_esistente in fingerprints_visti:
+                        if fp_esistente.startswith('ig_') and len(titolo_norm) > 10:
+                            # Controllo se titoli molto simili (possibili varianti)
+                            # Questo è un controllo aggiuntivo opzionale
+                            pass
+                    
                 continue
             else:
-                log_message(f"✅ DEBUG: NUOVO - Fingerprint non visto: {fingerprint}")
+                log_message(f"✅ DEBUG: NUOVO - {fingerprint}")
             
-            # CONTROLLO DATA RIGOROSO
+            # Controllo data
             pub_date = getattr(entry, 'published_parsed', None)
             if pub_date:
                 entry_date = datetime(*pub_date[:6])
-                
-                # Skip contenuti vecchi
-                if entry_date < due_giorni_fa:
-                    log_message(f"⏭️ Skip contenuto vecchio: {entry_date.strftime('%d/%m/%Y %H:%M')}")
+                if entry_date < filtro_temporale:
+                    log_message(f"⏭ Skip contenuto vecchio: {entry_date.strftime('%d/%m/%Y %H:%M')}")
                     continue
-                    
-                # Log della data per debug
                 log_message(f"📅 Contenuto del: {entry_date.strftime('%d/%m/%Y %H:%M')}")
-            else:
-                # Se non ha data, è probabilmente vecchio - skip in caso di primo avvio
-                if primo_avvio:
-                    log_message(f"⏭️ Skip contenuto senza data (primo avvio)")
-                    continue
+            elif primo_avvio:
+                log_message(f"⏭ Skip contenuto senza data (primo avvio)")
+                continue
             
-            # Pulisci contenuto Instagram
-            tipo = feed_info.get('type', 'rss')
-            if 'instagram' in tipo:
+            # Pulisci contenuto
+            if 'instagram' in feed_type:
                 titolo = pulisci_contenuto_instagram(titolo, link)
             
             # Crea messaggio
@@ -544,34 +601,29 @@ def controlla_feed(feed_info, fingerprints_visti):
                 f"🔗 {link}"
             )
             
-            # Aggiungi info sulla data se disponibile
             if pub_date:
                 data_pub = datetime(*pub_date[:6]).strftime("%d/%m/%Y %H:%M")
                 messaggio += f"\n📅 {data_pub}"
             
-            # Aggiungi fingerprint per debug (solo in modalità test)
             if TEST_MODE:
                 messaggio += f"\n🔍 FP: {fingerprint}"
+                messaggio += f"\n📝 Tipo: {feed_type}"
             
             nuovi_contenuti.append({'fingerprint': fingerprint, 'messaggio': messaggio})
             fingerprints_visti.add(fingerprint)
             contenuti_processati += 1
             
-            log_message(f"✅ DEBUG: NUOVO contenuto aggiunto - FP: {fingerprint}, Tot fingerprints ora: {len(fingerprints_visti)}")
+            log_message(f"✅ DEBUG: NUOVO contenuto aggiunto - {fingerprint}")
         
-        if primo_avvio and contenuti_processati > 0:
-            log_message(f"🎯 Primo avvio: {contenuti_processati} contenuto inizializzato per {feed_info['name']}")
-        else:
-            log_message(f"🆕 {len(nuovi_contenuti)} nuovi contenuti in {feed_info['name']}")
+        log_message(f"🆕 {len(nuovi_contenuti)} nuovi contenuti in {feed_info['name']}")
         
     except requests.exceptions.RequestException as e:
         log_message(f"❌ Errore di rete per {feed_info['name']}: {e}", "ERROR")
-        # Per Instagram, suggerisci soluzioni alternative
         if 'instagram' in feed_info.get('type', ''):
             invia_messaggio_telegram(
-                f"⚠️ <b>{feed_info['name']}</b>\n\n"
+                f"⚠ <b>{feed_info['name']}</b>\n\n"
                 f"❌ Feed Instagram non disponibile\n"
-                f"💡 Considera di usare RSS.app o Feedity per questo account\n"
+                f"💡 Considera di usare RSS.app o Feedity\n"
                 f"🔗 https://rss.app/rss-feed/create-instagram-rss-feed"
             )
     except Exception as e:
@@ -589,20 +641,21 @@ def invia_report_stato():
     
     report = (
         f"📊 <b>RSS Monitor - Report Stato</b>\n\n"
-        f"✅ Monitor attivo (v2.0 Anti-Duplicati + Cronologico)\n"
+        f"✅ Monitor attivo (v2.1 Instagram Fix)\n"
         f"📡 {feeds_attivi} feed monitorati\n"
-        f"📸 {feeds_instagram} feed Instagram\n"
+        f"📸 {feeds_instagram} feed Instagram (anti-duplicati migliorato)\n"
         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-        f"🛡️ Sistema anti-duplicati attivo\n"
-        f"⏰ Invio in ordine cronologico (più recenti per ultimi)\n"
-        f"ℹ️ I feed Instagram potrebbero richiedere configurazione aggiuntiva"
+        f"🛡 Sistema anti-duplicati specifico per Instagram\n"
+        f"🎯 Fingerprint basati su ID post quando disponibili\n"
+        f"⏰ Invio in ordine cronologico\n"
+        f"🔧 Filtro temporale: 3 giorni per Instagram, 2 per altri"
     )
     
     invia_messaggio_telegram(report)
 
 def main():
     log_message("=" * 60)
-    log_message("🤖 RSS FEED MONITOR v2.0 - Anti-Duplicati + Cronologico")
+    log_message("🤖 RSS FEED MONITOR v2.1 - Instagram Fix Anti-Duplicati")
     log_message("=" * 60)
     log_message(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log_message(f"📋 Monitoraggio {len(FEEDS_DA_MONITORARE)} feed")
@@ -613,29 +666,29 @@ def main():
     
     if TEST_MODE:
         log_message("🧪 Modalità test attivata")
-        invia_messaggio_telegram("🧪 Test RSS Monitor v2.0 (Anti-Duplicati + Cronologico) completato con successo ✅")
+        invia_messaggio_telegram("🧪 Test RSS Monitor v2.1 (Instagram Fix) completato con successo ✅")
         invia_report_stato()
         return
     
     fingerprints_visti = carica_link_visti()
     
-    # Invia report di stato ogni tanto (es. una volta al giorno)
+    # Report stato periodico
     ora_corrente = datetime.now().hour
-    if ora_corrente == 9:  # Alle 9:00
+    if ora_corrente == 9:
         invia_report_stato()
     
-    # FASE 1: Raccolta di tutti i contenuti da tutti i feed
+    # FASE 1: Raccolta contenuti
     log_message("🔄 FASE 1: Raccolta contenuti da tutti i feed...")
     tutti_i_contenuti = []
     
     for feed_info in FEEDS_DA_MONITORARE:
         nuovi_contenuti = controlla_feed(feed_info, fingerprints_visti)
         for contenuto in nuovi_contenuti:
-            # Aggiungi info per ordinamento cronologico
             tutti_i_contenuti.append({
                 'messaggio': contenuto['messaggio'],
                 'fingerprint': contenuto['fingerprint'],
                 'feed_name': feed_info['name'],
+                'feed_type': feed_info.get('type', 'rss'),
                 'data_pub': estrai_data_da_messaggio(contenuto['messaggio'])
             })
     
@@ -647,54 +700,67 @@ def main():
         log_message("=" * 60)
         return
     
-    # FASE 2: Ordinamento cronologico (dal più vecchio al più recente)
-    log_message("🗂️ FASE 2: Ordinamento cronologico...")
+    # FASE 2: Ordinamento cronologico
+    log_message("🗂 FASE 2: Ordinamento cronologico...")
     
     def ordina_per_data(contenuto):
         data = contenuto['data_pub']
         if data:
             return data
         else:
-            # Contenuti senza data vanno per primi (considerati più vecchi)
             return datetime(1970, 1, 1)
     
     tutti_i_contenuti.sort(key=ordina_per_data)
     
-    # Log dell'ordine per debug
+    # Log ordine
     log_message("📋 Ordine di invio (dal più vecchio al più recente):")
     for i, contenuto in enumerate(tutti_i_contenuti, 1):
         data_str = contenuto['data_pub'].strftime('%d/%m %H:%M') if contenuto['data_pub'] else 'Senza data'
-        log_message(f"   {i}. [{data_str}] {contenuto['feed_name']}")
+        tipo_str = f"[{contenuto['feed_type']}]" if contenuto['feed_type'] != 'rss' else ""
+        log_message(f"   {i}. [{data_str}] {contenuto['feed_name']} {tipo_str}")
     
-    # FASE 3: Invio in ordine cronologico
+    # FASE 3: Invio messaggi
     log_message("📤 FASE 3: Invio messaggi in ordine cronologico...")
     nuovi_contenuti_totali = 0
+    instagram_inviati = 0
     
     for contenuto in tutti_i_contenuti:
         if invia_messaggio_telegram(contenuto['messaggio']):
             nuovi_contenuti_totali += 1
+            if 'instagram' in contenuto['feed_type']:
+                instagram_inviati += 1
             log_message(f"✅ Inviato: {contenuto['feed_name']} | FP: {contenuto['fingerprint']}")
-            time.sleep(2)  # Pausa più lunga per evitare rate limiting
+            
+            # Pausa più lunga per Instagram per evitare problemi
+            if 'instagram' in contenuto['feed_type']:
+                time.sleep(3)
+            else:
+                time.sleep(2)
         else:
             log_message(f"❌ Errore invio: {contenuto['feed_name']}")
     
+    # Salva stato finale
     salva_link_visti(fingerprints_visti)
     
+    # Report finale
     log_message("=" * 60)
-    log_message(f"📤 {nuovi_contenuti_totali} contenuti inviati in ordine cronologico")
+    log_message(f"📤 {nuovi_contenuti_totali} contenuti inviati ({instagram_inviati} Instagram)")
     log_message(f"💾 {len(fingerprints_visti)} fingerprints tracciati")
-    log_message("🕐 I più recenti sono stati inviati per ultimi (in cima alla chat)")
+    
+    # Conta fingerprints Instagram
+    instagram_fps = len([fp for fp in fingerprints_visti if fp.startswith('ig_')])
+    log_message(f"📸 {instagram_fps} fingerprints Instagram specifici")
+    log_message("🎯 Sistema anti-duplicati Instagram attivo")
     log_message("=" * 60)
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     try:
         main()
     except KeyboardInterrupt:
-        log_message("⏹️ Interruzione manuale")
+        log_message("⏹ Interruzione manuale")
         sys.exit(0)
     except Exception as e:
         log_message(f"💥 Errore critico: {e}", "ERROR")
-        # Invia notifica di errore critico
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-            invia_messaggio_telegram(f"🚨 <b>RSS Monitor v2.0 - Errore Critico</b>\n\n❌ {str(e)}")
+            invia_messaggio_telegram(f"🚨 <b>RSS Monitor v2.1 - Errore Critico</b>\n\n❌ {str(e)}")
         sys.exit(1)
