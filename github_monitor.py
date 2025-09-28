@@ -180,38 +180,49 @@ def verifica_configurazione():
 
 def carica_link_visti():
     """Carica i fingerprint già visti dal file JSON locale o da GitHub Gist."""
+    log_message("🔍 DEBUG: Inizio caricamento fingerprints...")
+    
     # Prima prova a caricare da GitHub Gist (persistente)
     fingerprints_da_gist = carica_da_gist()
     if fingerprints_da_gist:
+        log_message(f"☁️ DEBUG: Caricati {len(fingerprints_da_gist)} da Gist")
         return fingerprints_da_gist
     
     # Se non c'è Gist, prova il file locale
     if not os.path.exists(FILE_VISTI):
-        log_message(f"📁 File {FILE_VISTI} non trovato - primo avvio")
-        
-        # PRIMO AVVIO: crea un set iniziale con timestamp per evitare spam
-        primo_avvio_marker = f"primo_avvio_{datetime.now().strftime('%Y%m%d')}"
-        log_message(f"🎯 Primo avvio rilevato - modalità inizializzazione attiva")
-        return {primo_avvio_marker}
+        log_message(f"📁 DEBUG: File {FILE_VISTI} non trovato - primo avvio")
+        # PRIMO AVVIO: NO MARKER - ritorna set vuoto
+        log_message(f"🎯 PRIMO AVVIO: Set vuoto per evitare loop")
+        return set()
     
     try:
         with open(FILE_VISTI, 'r', encoding='utf-8') as f:
             content = f.read().strip()
+            log_message(f"📄 DEBUG: File content length: {len(content)}")
+            
             if not content:
+                log_message("📄 DEBUG: File vuoto")
                 return set()
+                
             data = json.loads(content)
+            log_message(f"📊 DEBUG: JSON keys: {list(data.keys())}")
             
             # Carica fingerprints (nuovo formato) o link (vecchio formato per compatibilità)
             fingerprints = set(data.get('fingerprints_visti', []))
+            log_message(f"🔢 DEBUG: Fingerprints trovati: {len(fingerprints)}")
+            
             if not fingerprints:
                 # Fallback a vecchio formato
                 old_links = set(data.get('link_visti', []))
+                log_message(f"🔄 DEBUG: Old links trovati: {len(old_links)}")
+                
                 if old_links:
                     log_message(f"🔄 Conversione da vecchio formato: {len(old_links)} link")
                     # Genera fingerprints dai vecchi link
                     for link in old_links:
                         fp = hashlib.md5(link.encode('utf-8')).hexdigest()[:12]
                         fingerprints.add(fp)
+                    log_message(f"✅ DEBUG: Convertiti in {len(fingerprints)} fingerprints")
             
             # Controlla età dei dati
             ultimo_aggiornamento = data.get('ultimo_aggiornamento', '')
@@ -219,21 +230,28 @@ def carica_link_visti():
                 try:
                     ultima_data = datetime.fromisoformat(ultimo_aggiornamento.replace('Z', '+00:00'))
                     giorni_fa = (datetime.now() - ultima_data.replace(tzinfo=None)).days
+                    log_message(f"📅 DEBUG: Dati di {giorni_fa} giorni fa")
+                    
                     if giorni_fa > 7:
                         log_message(f"⚠️ Dati vecchi di {giorni_fa} giorni - reset parziale")
                         # Mantieni solo fingerprints recenti
-                        return set(list(fingerprints)[-200:]) if len(fingerprints) > 200 else fingerprints
-                except:
-                    pass
+                        fingerprints_recenti = set(list(fingerprints)[-200:]) if len(fingerprints) > 200 else fingerprints
+                        log_message(f"🗑️ DEBUG: Rimossi, rimangono: {len(fingerprints_recenti)}")
+                        return fingerprints_recenti
+                except Exception as e:
+                    log_message(f"❌ DEBUG: Errore parsing data: {e}")
             
-            log_message(f"📂 Caricati {len(fingerprints)} fingerprints già processati")
+            log_message(f"📂 DEBUG: FINALE - Caricati {len(fingerprints)} fingerprints già processati")
             return fingerprints
+            
     except Exception as e:
-        log_message(f"❌ Errore nel leggere {FILE_VISTI}: {e}", "ERROR")
+        log_message(f"❌ DEBUG: Errore nel leggere {FILE_VISTI}: {e}", "ERROR")
         return set()
 
 def salva_link_visti(fingerprints_visti):
     """Salva i fingerprints visti nel file JSON locale con gestione GitHub Gist."""
+    log_message(f"💾 DEBUG: Inizio salvataggio {len(fingerprints_visti)} fingerprints...")
+    
     try:
         data = {
             'ultimo_aggiornamento': datetime.now().isoformat(),
@@ -242,12 +260,32 @@ def salva_link_visti(fingerprints_visti):
             'github_action': True,
             'repository': os.getenv('GITHUB_REPOSITORY', 'unknown'),
             'run_id': os.getenv('GITHUB_RUN_ID', 'unknown'),
-            'versione': '2.0_anti_duplicati'
+            'versione': '2.0_anti_duplicati_debug'
         }
+        
+        # DEBUG: Mostra primi 3 fingerprints
+        if fingerprints_visti:
+            primi_3 = list(fingerprints_visti)[:3]
+            log_message(f"🔍 DEBUG: Primi 3 fingerprints: {primi_3}")
         
         # Salva localmente
         with open(FILE_VISTI, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        # Verifica immediata del salvataggio
+        if os.path.exists(FILE_VISTI):
+            with open(FILE_VISTI, 'r', encoding='utf-8') as f:
+                verifica = json.load(f)
+                saved_count = len(verifica.get('fingerprints_visti', []))
+                log_message(f"✅ DEBUG: Verifica salvataggio - {saved_count} fingerprints salvati")
+                
+                if saved_count != len(fingerprints_visti):
+                    log_message(f"❌ DEBUG: ERRORE! Salvati {saved_count} invece di {len(fingerprints_visti)}")
+                else:
+                    log_message(f"✅ DEBUG: Salvataggio locale OK")
+        else:
+            log_message(f"❌ DEBUG: File non creato!")
+        
         log_message(f"💾 Salvati {len(fingerprints_visti)} fingerprints nel file {FILE_VISTI}")
         
         # Prova a sincronizzare con GitHub Gist per persistenza
@@ -255,7 +293,9 @@ def salva_link_visti(fingerprints_visti):
         
         return True
     except Exception as e:
-        log_message(f"❌ Errore nel salvare {FILE_VISTI}: {e}", "ERROR")
+        log_message(f"❌ DEBUG: Errore nel salvare {FILE_VISTI}: {e}", "ERROR")
+        import traceback
+        log_message(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
         return False
 
 def salva_su_gist(data):
@@ -442,7 +482,8 @@ def controlla_feed(feed_info, fingerprints_visti):
         due_giorni_fa = datetime.now() - timedelta(days=2)
         
         # Primo avvio: prendi solo ultimo elemento per feed per evitare spam
-        primo_avvio = "primo_avvio" in str(fingerprints_visti)
+        primo_avvio = len(fingerprints_visti) <= 1  # Cambiato: considera primo avvio solo se 0 o 1 fingerprints
+        log_message(f"🎯 DEBUG: Primo avvio? {primo_avvio} (fingerprints: {len(fingerprints_visti)})")
         contenuti_processati = 0
         
         # Ordina per data (più recenti prima)
@@ -468,8 +509,10 @@ def controlla_feed(feed_info, fingerprints_visti):
             
             # Controlla se già visto (usando fingerprint invece di link)
             if fingerprint in fingerprints_visti:
-                log_message(f"⏭️ SKIP - Fingerprint già visto: {fingerprint}")
+                log_message(f"⏭️ DEBUG: SKIP duplicato - Fingerprint già visto: {fingerprint}")
                 continue
+            else:
+                log_message(f"✅ DEBUG: NUOVO - Fingerprint non visto: {fingerprint}")
             
             # CONTROLLO DATA RIGOROSO
             pub_date = getattr(entry, 'published_parsed', None)
@@ -514,7 +557,7 @@ def controlla_feed(feed_info, fingerprints_visti):
             fingerprints_visti.add(fingerprint)
             contenuti_processati += 1
             
-            log_message(f"✅ NUOVO contenuto aggiunto: FP {fingerprint}")
+            log_message(f"✅ DEBUG: NUOVO contenuto aggiunto - FP: {fingerprint}, Tot fingerprints ora: {len(fingerprints_visti)}")
         
         if primo_avvio and contenuti_processati > 0:
             log_message(f"🎯 Primo avvio: {contenuti_processati} contenuto inizializzato per {feed_info['name']}")
