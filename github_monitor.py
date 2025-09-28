@@ -315,7 +315,7 @@ def carica_link_visti():
         return set()
 
 def salva_link_visti(fingerprints_visti):
-    """Salva i fingerprints visti nel file JSON locale con gestione GitHub Gist."""
+    """Salva i fingerprints visti solo su GitHub Gist (no file locale per evitare commit issues)."""
     log_message(f"💾 DEBUG: Inizio salvataggio {len(fingerprints_visti)} fingerprints...")
     
     try:
@@ -332,7 +332,7 @@ def salva_link_visti(fingerprints_visti):
             'github_action': True,
             'repository': os.getenv('GITHUB_REPOSITORY', 'unknown'),
             'run_id': os.getenv('GITHUB_RUN_ID', 'unknown'),
-            'versione': '2.1_instagram_fix'
+            'versione': '2.1_gist_only'
         }
         
         # DEBUG: Mostra statistiche
@@ -342,18 +342,16 @@ def salva_link_visti(fingerprints_visti):
             if primi_ig:
                 log_message(f"🔍 DEBUG: Primi 3 Instagram FPs: {primi_ig}")
         
-        # Salva localmente
-        with open(FILE_VISTI, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        log_message(f"💾 Salvati {len(fingerprints_visti)} fingerprints nel file {FILE_VISTI}")
-        
-        # Sincronizza con GitHub Gist
-        salva_su_gist(data)
+        # Salva SOLO su Gist - no file locale per evitare problemi di commit
+        success = salva_su_gist(data)
+        if success:
+            log_message(f"☁️ Salvati {len(fingerprints_visti)} fingerprints su GitHub Gist")
+        else:
+            log_message(f"⚠️ Fallback: dati mantenuti in memoria per questa esecuzione")
         
         return True
     except Exception as e:
-        log_message(f"❌ DEBUG: Errore nel salvare {FILE_VISTI}: {e}", "ERROR")
+        log_message(f"❌ DEBUG: Errore nel salvataggio: {e}", "ERROR")
         return False
 
 def salva_su_gist(data):
