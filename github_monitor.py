@@ -406,6 +406,18 @@ def pulisci_contenuto_instagram(titolo, link):
     
     return titolo_pulito
 
+def estrai_data_da_messaggio(messaggio):
+    """Estrae la data dal messaggio per l'ordinamento cronologico."""
+    try:
+        # Cerca pattern data nel messaggio (formato: 📅 DD/MM/YYYY HH:MM)
+        match = re.search(r'📅 (\d{2}/\d{2}/\d{4} \d{2}:\d{2})', messaggio)
+        if match:
+            data_str = match.group(1)
+            return datetime.strptime(data_str, '%d/%m/%Y %H:%M')
+    except:
+        pass
+    return None
+
 def controlla_feed(feed_info, fingerprints_visti):
     """Controlla un singolo feed per nuovi contenuti con sistema anti-duplicati."""
     nuovi_contenuti = []
@@ -534,11 +546,12 @@ def invia_report_stato():
     
     report = (
         f"📊 <b>RSS Monitor - Report Stato</b>\n\n"
-        f"✅ Monitor attivo (v2.0 Anti-Duplicati)\n"
+        f"✅ Monitor attivo (v2.0 Anti-Duplicati + Cronologico)\n"
         f"📡 {feeds_attivi} feed monitorati\n"
         f"📸 {feeds_instagram} feed Instagram\n"
         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
         f"🛡️ Sistema anti-duplicati attivo\n"
+        f"⏰ Invio in ordine cronologico (più recenti per ultimi)\n"
         f"ℹ️ I feed Instagram potrebbero richiedere configurazione aggiuntiva"
     )
     
@@ -546,7 +559,7 @@ def invia_report_stato():
 
 def main():
     log_message("=" * 60)
-    log_message("🤖 RSS FEED MONITOR v2.0 - Anti-Duplicati")
+    log_message("🤖 RSS FEED MONITOR v2.0 - Anti-Duplicati + Cronologico")
     log_message("=" * 60)
     log_message(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     log_message(f"📋 Monitoraggio {len(FEEDS_DA_MONITORARE)} feed")
@@ -557,35 +570,77 @@ def main():
     
     if TEST_MODE:
         log_message("🧪 Modalità test attivata")
-        invia_messaggio_telegram("🧪 Test RSS Monitor v2.0 (Anti-Duplicati) completato con successo ✅")
+        invia_messaggio_telegram("🧪 Test RSS Monitor v2.0 (Anti-Duplicati + Cronologico) completato con successo ✅")
         invia_report_stato()
         return
     
     fingerprints_visti = carica_link_visti()
-    nuovi_contenuti_totali = 0
     
     # Invia report di stato ogni tanto (es. una volta al giorno)
     ora_corrente = datetime.now().hour
     if ora_corrente == 9:  # Alle 9:00
         invia_report_stato()
     
+    # FASE 1: Raccolta di tutti i contenuti da tutti i feed
+    log_message("🔄 FASE 1: Raccolta contenuti da tutti i feed...")
+    tutti_i_contenuti = []
+    
     for feed_info in FEEDS_DA_MONITORARE:
         nuovi_contenuti = controlla_feed(feed_info, fingerprints_visti)
         for contenuto in nuovi_contenuti:
-            if invia_messaggio_telegram(contenuto['messaggio']):
-                nuovi_contenuti_totali += 1
-                time.sleep(2)  # Pausa più lunga per evitare rate limiting
+            # Aggiungi info per ordinamento cronologico
+            tutti_i_contenuti.append({
+                'messaggio': contenuto['messaggio'],
+                'fingerprint': contenuto['fingerprint'],
+                'feed_name': feed_info['name'],
+                'data_pub': estrai_data_da_messaggio(contenuto['messaggio'])
+            })
+    
+    log_message(f"📦 Raccolti {len(tutti_i_contenuti)} nuovi contenuti totali")
+    
+    if not tutti_i_contenuti:
+        log_message("📭 Nessun nuovo contenuto trovato")
+        salva_link_visti(fingerprints_visti)
+        log_message("=" * 60)
+        return
+    
+    # FASE 2: Ordinamento cronologico (dal più vecchio al più recente)
+    log_message("🗂️ FASE 2: Ordinamento cronologico...")
+    
+    def ordina_per_data(contenuto):
+        data = contenuto['data_pub']
+        if data:
+            return data
+        else:
+            # Contenuti senza data vanno per primi (considerati più vecchi)
+            return datetime(1970, 1, 1)
+    
+    tutti_i_contenuti.sort(key=ordina_per_data)
+    
+    # Log dell'ordine per debug
+    log_message("📋 Ordine di invio (dal più vecchio al più recente):")
+    for i, contenuto in enumerate(tutti_i_contenuti, 1):
+        data_str = contenuto['data_pub'].strftime('%d/%m %H:%M') if contenuto['data_pub'] else 'Senza data'
+        log_message(f"   {i}. [{data_str}] {contenuto['feed_name']}")
+    
+    # FASE 3: Invio in ordine cronologico
+    log_message("📤 FASE 3: Invio messaggi in ordine cronologico...")
+    nuovi_contenuti_totali = 0
+    
+    for contenuto in tutti_i_contenuti:
+        if invia_messaggio_telegram(contenuto['messaggio']):
+            nuovi_contenuti_totali += 1
+            log_message(f"✅ Inviato: {contenuto['feed_name']} | FP: {contenuto['fingerprint']}")
+            time.sleep(2)  # Pausa più lunga per evitare rate limiting
+        else:
+            log_message(f"❌ Errore invio: {contenuto['feed_name']}")
     
     salva_link_visti(fingerprints_visti)
     
     log_message("=" * 60)
-    log_message(f"📤 {nuovi_contenuti_totali} nuovi contenuti inviati")
+    log_message(f"📤 {nuovi_contenuti_totali} contenuti inviati in ordine cronologico")
     log_message(f"💾 {len(fingerprints_visti)} fingerprints tracciati")
-    
-    # Messaggio finale se non ci sono nuovi contenuti
-    if nuovi_contenuti_totali == 0:
-        log_message("📭 Nessun nuovo contenuto trovato")
-    
+    log_message("🕐 I più recenti sono stati inviati per ultimi (in cima alla chat)")
     log_message("=" * 60)
 
 if __name__ == "__main__":
