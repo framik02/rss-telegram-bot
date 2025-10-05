@@ -23,7 +23,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
 # CHAT IDS - Aggiungi tutti i destinatari qui
 # Formato: lista separata da virgole o variabile d'ambiente
-TELEGRAM_CHAT_IDS = os.getenv("-4942650093", "").split(",")
+TELEGRAM_CHAT_IDS = "-4942650093"
 
 # In alternativa, puoi definirli direttamente nel codice:
 # TELEGRAM_CHAT_IDS = [
